@@ -1,0 +1,112 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Mobily Creative Studio — Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+# Everything here can be edited without touching Python code.
+# After editing, restart the service for changes to take effect.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+model:
+  id: "gemini-3-pro-image-preview"
+
+# ---------------------------------------------------------------------------
+# Defaults — applied when the user doesn't specify a value
+# ---------------------------------------------------------------------------
+defaults:
+  visual_style: "photorealistic"
+  logo_size: "medium"
+  composition: "default"
+  lighting: "default"
+  aspect_ratio: "16:9"
+  image_size: "1K"
+  text_style: "elegant typography"
+  website_url: ""
+
+# ---------------------------------------------------------------------------
+# Allowed output options  (from Google Gemini 3 docs)
+# ---------------------------------------------------------------------------
+allowed_aspect_ratios:
+  - "1:1"
+  - "3:2"
+  - "2:3"
+  - "3:4"
+  - "4:3"
+  - "4:5"
+  - "5:4"
+  - "9:16"
+  - "16:9"
+  - "21:9"
+
+allowed_image_sizes:
+  - "1K"
+  - "2K"
+  - "4K"
+
+# ---------------------------------------------------------------------------
+# Visual Style / Medium
+# ---------------------------------------------------------------------------
+# Controls the overall art direction.
+# Best practice: "Explicitly name your desired aesthetic to control the
+# visual mood."  — Google Nano Banana Pro prompting guide
+#
+# KEY = dropdown value the user selects
+# VALUE = phrase prepended to the prompt
+# ---------------------------------------------------------------------------
+visual_styles:
+  photorealistic:  "A photorealistic photograph"
+  3d_render:       "A high-quality 3D rendered image"
+  illustration:    "A professional digital illustration"
+  flat_design:     "A clean flat-design graphic"
+  watercolor:      "A delicate watercolor painting"
+  cinematic:       "A cinematic film still"
+  anime:           "A detailed anime-style illustration"
+  minimalist:      "A sleek minimalist design"
+  vintage_poster:  "A vintage retro poster"
+  isometric:       "A perfectly isometric 3D scene"
+
+# ---------------------------------------------------------------------------
+# Logo Prominence
+# ---------------------------------------------------------------------------
+# Maps user intent to descriptive language the model can reason about
+# when placing the logo.
+# ---------------------------------------------------------------------------
+logo_sizes:
+  small:  "a subtle, discreet watermark-sized logo placed unobtrusively"
+  medium: "a clearly visible, standard-sized corporate logo"
+  large:  "a prominent, bold hero-sized brand logo"
+  none:   ""
+
+# ---------------------------------------------------------------------------
+# Composition / Camera Presets
+# ---------------------------------------------------------------------------
+# Best practice: "composition, camera movements, scene shots and framing"
+# Set to "" (empty) to let the model decide.
+# ---------------------------------------------------------------------------
+compositions:
+  default:         ""
+  close_up:        "Close-up shot, shallow depth of field, subject fills the frame."
+  wide:            "Wide-angle shot, expansive view showing the full environment."
+  medium:          "Medium shot, subject from the waist up with environmental context."
+  birds_eye:       "Bird's-eye / top-down view looking straight down."
+  low_angle:       "Low-angle shot looking upward, giving a powerful perspective."
+  isometric:       "Perfectly isometric 45° top-down view, no perspective distortion."
+  rule_of_thirds:  "Subject placed at the left-third intersection, balanced negative space."
+
+# ---------------------------------------------------------------------------
+# Lighting Presets
+# ---------------------------------------------------------------------------
+# Best practice: "Lighting dictates the mood"
+# Set to "" (empty) to let the model decide.
+# ---------------------------------------------------------------------------
+lightings:
+  default:      ""
+  golden_hour:  "Warm golden-hour sunlight with long soft shadows."
+  blue_hour:    "Cool blue-hour twilight with deep, moody tones."
+  studio:       "Clean three-point studio lighting with soft shadows."
+  neon:         "Vibrant neon lighting with colorful reflections on wet surfaces."
+  dramatic:     "Dramatic chiaroscuro lighting with high contrast between light and shadow."
+  soft_natural: "Soft, diffused natural daylight."
+  backlit:      "Strong backlight creating a rim-light silhouette effect."
+  candlelight:  "Warm, intimate candlelight glow."
