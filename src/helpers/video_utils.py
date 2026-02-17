@@ -126,16 +126,44 @@ def download_from_gcs(gcs_uri: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Veo Video Generation
+# Veo Video Generation  (supports Veo 3.0 + 3.1 features)
 # ---------------------------------------------------------------------------
+
+@dataclass
+class ImageInput:
+    """A single image with its bytes and MIME type."""
+    data: bytes
+    mime_type: str = "image/png"
+    filename: str = ""
+
+
+def _upload_image_to_gcs(image: ImageInput, purpose: str = "input") -> str:
+    """Upload image bytes to GCS and return the gs:// URI."""
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ext = "png" if "png" in image.mime_type else "jpg"
+    slug = _slugify(image.filename or purpose, max_words=3)
+    blob_path = f"video_inputs/{date_str}/{slug}_{uuid.uuid4().hex[:8]}.{ext}"
+    upload_bytes_to_gcs(image.data, blob_path, content_type=image.mime_type)
+    uri = f"gs://{BUCKET_NAME}/{blob_path}"
+    logger.info("Uploaded %s image to %s", purpose, uri)
+    return uri
+
+
 def generate_video(
     prompt: str,
     aspect_ratio: str = "16:9",
-    duration_seconds: int = 5,
+    duration_seconds: int = 8,
     negative_prompt: str | None = None,
     generate_audio: bool = True,
-    source_image_bytes: bytes | None = None,
-    source_image_mime: str = "image/png",
+    resolution: str = "720p",
+    number_of_videos: int = 1,
+    seed: int | None = None,
+    generation_mode: str = "text_to_video",
+    source_image_gcs_uri: str | None = None,
+    source_image_mime: str | None = None,
+    last_frame_gcs_uri: str | None = None,
+    last_frame_mime: str | None = None,
+    reference_images: list[ImageInput] | None = None,
     output_gcs_uri: str | None = None,
     model_id: str | None = None,
     poll_interval: int = 15,
@@ -143,78 +171,125 @@ def generate_video(
 ) -> VideoGenerationResult:
     """Submit a Veo video generation request and poll until complete.
 
+    Three modes (aligned with official Vertex AI Veo docs):
+
+    - **text_to_video**: Prompt only. No images.
+      SDK: generate_videos(model, prompt, config=...)
+
+    - **image_to_video**: Single image as first frame + prompt.
+      SDK: generate_videos(model, prompt, image=Image(...), config=...)
+      Optionally accepts last_frame for controlled transition (e.g. logo reveal).
+
+    - **reference_to_video**: 1-3 reference images for identity/asset
+      preservation (Veo 3.1 preview only, duration always 8s).
+      SDK: generate_videos(model, prompt, config=GenerateVideosConfig(reference_images=[...]))
+
     Parameters
     ----------
     prompt : str
-        The assembled prompt from video_prompt_generator.
-    aspect_ratio : str
-        "16:9" or "9:16".
-    duration_seconds : int
-        5-8 seconds.
-    negative_prompt : str, optional
-        What to avoid in the video.
-    generate_audio : bool
-        Whether Veo should generate native audio (Veo 3+).
-    source_image_bytes : bytes, optional
-        First-frame image bytes. If provided, Veo animates from this image.
-    source_image_mime : str
-        MIME type of the source image.
-    output_gcs_uri : str
-        GCS prefix where Veo writes output files.
-    model_id : str, optional
-        Override the default model.
-    poll_interval : int
-        Seconds between poll attempts.
-    max_wait : int
-        Maximum seconds to wait before timeout.
-
-    Returns
-    -------
-    VideoGenerationResult
-
-    Raises
-    ------
-    RuntimeError
-        If generation fails or times out.
+        The assembled cinematic prompt.
+    source_image_gcs_uri : str, optional
+        GCS URI of the source image for image_to_video mode (first frame).
+    source_image_mime : str, optional
+        MIME type of the source image (image/jpeg, image/png, image/webp).
+    last_frame_gcs_uri : str, optional
+        GCS URI of the last frame image (e.g. logo card for brand reveal).
+        Used with image_to_video mode to control video end state.
+    last_frame_mime : str, optional
+        MIME type of the last frame image.
+    reference_images : list[ImageInput], optional
+        Up to 3 images for identity preservation (person/product).
+    resolution : str
+        "720p", "1080p", or "4k".
+    number_of_videos : int
+        Number of variants to generate (1-4).
+    seed : int, optional
+        For reproducible results (0-4294967295).
     """
     model = model_id or VIDEO_MODEL_ID
 
-    # Build config
+    # ── Build config ─────────────────────────────────────────────────────
     config = types.GenerateVideosConfig(
         aspect_ratio=aspect_ratio,
-        number_of_videos=1,
+        number_of_videos=number_of_videos,
         duration_seconds=duration_seconds,
         generate_audio=generate_audio,
         person_generation="allow_adult",
     )
 
+    if resolution and resolution != "720p":
+        config.resolution = resolution
+
     if negative_prompt:
         config.negative_prompt = negative_prompt
+
+    if seed is not None:
+        config.seed = seed
 
     if output_gcs_uri:
         config.output_gcs_uri = output_gcs_uri
 
-    # Build image param if provided
-    image = None
-    if source_image_bytes:
-        # Upload source image to GCS first (Vertex AI requires GCS or base64)
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        img_gcs_path = f"video_inputs/{date_str}/source_{uuid.uuid4().hex[:8]}.png"
-        upload_bytes_to_gcs(
-            source_image_bytes, img_gcs_path, content_type=source_image_mime
-        )
-        image = types.Image(
-            gcs_uri=f"gs://{BUCKET_NAME}/{img_gcs_path}",
-            mime_type=source_image_mime,
-        )
-        logger.info("Source image uploaded to gs://%s/%s", BUCKET_NAME, img_gcs_path)
+    # ── Image-to-video: single source image as first frame ───────────────
+    # Official SDK: image=Image(gcs_uri=..., mime_type=...)
+    image_param = None
+    if generation_mode == "image_to_video" and source_image_gcs_uri:
+        mime = source_image_mime or "image/png"
+        image_param = types.Image(gcs_uri=source_image_gcs_uri, mime_type=mime)
+        logger.info("Image-to-video: using source image %s (%s)", source_image_gcs_uri, mime)
 
-    # Submit request
-    logger.info("Submitting Veo request: model=%s, duration=%ds", model, duration_seconds)
+    # ── Last frame (logo card / ending image) ────────────────────────────
+    # Official SDK: config.last_frame = Image(gcs_uri=..., mime_type=...)
+    # ⚠ ONLY supported by Veo 3.1 models (preview/fast_preview).
+    #   Veo 3.0 (standard/fast) will return 400 FAILED_PRECONDITION.
+    VEO_31_MODELS = {"veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", "veo-3.1-generate-001"}
+    if last_frame_gcs_uri and image_param is not None:
+        if model in VEO_31_MODELS:
+            lf_mime = last_frame_mime or "image/png"
+            config.last_frame = types.Image(gcs_uri=last_frame_gcs_uri, mime_type=lf_mime)
+            logger.info("Last frame set: %s (%s) — video will transition to this", last_frame_gcs_uri, lf_mime)
+        else:
+            logger.warning(
+                "last_frame skipped — model %s does not support it. "
+                "Use veo_variant=preview or fast_preview for logo-as-last-frame.",
+                model,
+            )
+
+    # ── Reference-to-video: 1-3 identity images in config ────────────────
+    # Official SDK: config.reference_images = [VideoGenerationReferenceImage(...)]
+    if generation_mode == "reference_to_video" and reference_images:
+        ref_list = []
+        for i, ref_img in enumerate(reference_images[:3]):
+            ref_uri = _upload_image_to_gcs(ref_img, f"reference_{i+1}")
+
+            # Try typed class first, fall back to dict if SDK version doesn't support it
+            try:
+                ref_obj = types.VideoGenerationReferenceImage(
+                    image=types.Image(gcs_uri=ref_uri, mime_type=ref_img.mime_type),
+                    reference_type="asset",
+                )
+            except (AttributeError, TypeError) as e:
+                logger.warning(
+                    "VideoGenerationReferenceImage not available (%s), using dict fallback", e
+                )
+                ref_obj = {
+                    "image": {"gcs_uri": ref_uri, "mime_type": ref_img.mime_type},
+                    "reference_type": "asset",
+                }
+
+            ref_list.append(ref_obj)
+        config.reference_images = ref_list
+        logger.info("Using %d reference image(s) for identity preservation", len(ref_list))
+
+    # ── Submit request ───────────────────────────────────────────────────
+    logger.info(
+        "Submitting Veo request: model=%s, mode=%s, duration=%ds, resolution=%s, variants=%d",
+        model, generation_mode, duration_seconds, resolution, number_of_videos,
+    )
+
     operation = genai_client.models.generate_videos(
         model=model,
         prompt=prompt,
-        image=image,
+        image=image_param,
         config=config,
     )
     logger.info("Operation started: %s", getattr(operation, "name", "unknown"))
@@ -436,6 +511,40 @@ def synthesize_speech(
 
 
 # ---------------------------------------------------------------------------
+# FFmpeg binary discovery (cross-platform)
+# ---------------------------------------------------------------------------
+def _get_ffmpeg_path() -> str:
+    """Find the ffmpeg binary — system PATH first, imageio-ffmpeg fallback.
+
+    Install imageio-ffmpeg for Windows environments without system ffmpeg:
+        pip install imageio-ffmpeg
+    """
+    import shutil
+
+    # 1. Check system PATH
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+
+    # 2. Try imageio-ffmpeg bundled binary
+    try:
+        import imageio_ffmpeg
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled:
+            logger.info("Using imageio-ffmpeg bundled binary: %s", bundled)
+            return bundled
+    except ImportError:
+        pass
+
+    # 3. Give up with a helpful message
+    raise FileNotFoundError(
+        "ffmpeg not found. Install it via:\n"
+        "  pip install imageio-ffmpeg    (recommended — bundles a static binary)\n"
+        "  OR install ffmpeg system-wide: https://ffmpeg.org/download.html"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Audio Merge (ffmpeg)
 # ---------------------------------------------------------------------------
 def merge_audio_video(
@@ -450,6 +559,7 @@ def merge_audio_video(
 
     Returns the merged video as bytes (mp4).
     """
+    ffmpeg_bin = _get_ffmpeg_path()
     audio_ext = "mp3" if "mpeg" in audio_mime else "wav"
 
     with (
@@ -463,7 +573,7 @@ def merge_audio_video(
         af.flush()
 
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_bin, "-y",
             "-i", vf.name,
             "-i", af.name,
             "-c:v", "copy",
@@ -481,3 +591,71 @@ def merge_audio_video(
 
         with open(out.name, "rb") as f:
             return f.read()
+
+
+def create_logo_card(
+    logo_bytes: bytes,
+    aspect_ratio: str = "16:9",
+    bg_color: str = "#FFFFFF",
+    logo_scale: float = 0.35,
+) -> bytes:
+    """Create a branded card image with the logo centred on a solid background.
+
+    The card is used as Veo's ``last_frame`` so the video naturally
+    transitions into a brand reveal — no ffmpeg needed.
+
+    Parameters
+    ----------
+    logo_bytes : bytes
+        Logo image (PNG with transparency recommended).
+    aspect_ratio : str
+        Target video ratio ("16:9" or "9:16"). Determines card dimensions.
+    bg_color : str
+        Hex colour for the card background (default white).
+    logo_scale : float
+        Logo width as fraction of card width (0.1–0.8). Default 0.35.
+
+    Returns
+    -------
+    bytes
+        PNG image bytes of the branded card (720p resolution).
+    """
+    from PIL import Image as PILImage
+
+    # Card dimensions to match video resolution
+    if aspect_ratio == "9:16":
+        card_w, card_h = 720, 1280
+    else:
+        card_w, card_h = 1280, 720
+
+    # Create solid background
+    card = PILImage.new("RGBA", (card_w, card_h), bg_color)
+
+    # Open logo and resize preserving aspect ratio
+    logo = PILImage.open(io.BytesIO(logo_bytes)).convert("RGBA")
+    target_w = int(card_w * max(0.1, min(0.8, logo_scale)))
+    ratio = target_w / logo.width
+    target_h = int(logo.height * ratio)
+
+    # Don't let the logo exceed 60% of card height
+    if target_h > int(card_h * 0.6):
+        target_h = int(card_h * 0.6)
+        ratio = target_h / logo.height
+        target_w = int(logo.width * ratio)
+
+    logo_resized = logo.resize((target_w, target_h), PILImage.LANCZOS)
+
+    # Centre the logo on the card
+    x = (card_w - target_w) // 2
+    y = (card_h - target_h) // 2
+    card.paste(logo_resized, (x, y), logo_resized)  # use alpha channel as mask
+
+    # Export as PNG bytes
+    buf = io.BytesIO()
+    card.save(buf, format="PNG")
+    buf.seek(0)
+    logger.info(
+        "Created logo card: %dx%d, logo=%dx%d, bg=%s",
+        card_w, card_h, target_w, target_h, bg_color,
+    )
+    return buf.read()

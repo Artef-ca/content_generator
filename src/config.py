@@ -59,9 +59,12 @@ DEFAULTS: dict = _yaml["defaults"]
 ALLOWED_ASPECT_RATIOS: list[str] = _yaml["allowed_aspect_ratios"]
 ALLOWED_IMAGE_SIZES: list[str] = _yaml["allowed_image_sizes"]
 VISUAL_STYLE_MAP: dict[str, str] = _yaml["visual_styles"]
-LOGO_SIZE_MAP: dict[str, str] = _yaml["logo_sizes"]
-COMPOSITION_MAP: dict[str, str] = _yaml["compositions"]
+CAMERA_ANGLE_IMG_MAP: dict[str, str] = _yaml["camera_angles"]
+FRAMING_MAP: dict[str, str] = _yaml["framings"]
 LIGHTING_MAP: dict[str, str] = _yaml["lightings"]
+TONE_MAP: dict[str, str] = _yaml["tones"]
+COLOR_GRADING_MAP: dict[str, str] = _yaml["color_gradings"]
+LOGO_SIZE_MAP: dict[str, str] = _yaml["logo_sizes"]
 
 # ═══════════════════════════════════════════════════════════════════════════
 # VIDEO CONFIG  (from video_config.yaml)
@@ -69,8 +72,9 @@ LIGHTING_MAP: dict[str, str] = _yaml["lightings"]
 VIDEO_MODEL_ID: str = _video_yaml["model"]["id"]
 VIDEO_FAST_MODEL_ID: str = _video_yaml["model"]["fast_id"]
 VIDEO_PREVIEW_MODEL_ID: str = _video_yaml["model"]["preview_id"]
+VIDEO_FAST_PREVIEW_MODEL_ID: str = _video_yaml["model"]["fast_preview_id"]
 VIDEO_DEFAULTS: dict = _video_yaml["defaults"]
-DEFAULT_BRAND: dict = _video_yaml["default_brand"]
+BRAND_CONFIG: dict = _video_yaml.get("brand", {})
 
 # Preset maps
 CAMERA_ANGLE_MAP: dict[str, str] = _video_yaml["camera_angles"]
@@ -83,6 +87,8 @@ SOUND_AMBIENCE_MAP: dict[str, str] = _video_yaml["sound_ambiences"]
 # Allowed values
 VIDEO_ALLOWED_ASPECT_RATIOS: list[str] = _video_yaml["allowed_aspect_ratios"]
 ALLOWED_DURATIONS: list[int] = _video_yaml["allowed_durations"]
+ALLOWED_RESOLUTIONS: list[str] = _video_yaml["allowed_resolutions"]
+ALLOWED_GENERATION_MODES: list[str] = _video_yaml["allowed_generation_modes"]
 ALLOWED_AUDIO_MODES: list[str] = _video_yaml["allowed_audio_modes"]
 ALLOWED_TTS_LANGUAGES: list[str] = _video_yaml["allowed_tts_languages"]
 

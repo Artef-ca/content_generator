@@ -1,31 +1,27 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Mobily Creative Studio — Configuration
-# ═══════════════════════════════════════════════════════════════════════════
-# Everything here can be edited without touching Python code.
-# After editing, restart the service for changes to take effect.
+# Mobily Creative Studio — Image Generation Configuration
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
 model:
   id: "gemini-3-pro-image-preview"
 
 # ---------------------------------------------------------------------------
-# Defaults — applied when the user doesn't specify a value
+# Defaults
 # ---------------------------------------------------------------------------
 defaults:
   visual_style: "photorealistic"
-  logo_size: "medium"
-  composition: "default"
-  lighting: "default"
+  camera_angle: ""
+  framing: ""
+  lighting: ""
+  tone: ""
+  color_grading: ""
+  logo_size: "small"
   aspect_ratio: "16:9"
   image_size: "1K"
   text_style: "elegant typography"
-  website_url: ""
 
 # ---------------------------------------------------------------------------
-# Allowed output options  (from Google Gemini 3 docs)
+# Allowed output options
 # ---------------------------------------------------------------------------
 allowed_aspect_ratios:
   - "1:1"
@@ -47,13 +43,6 @@ allowed_image_sizes:
 # ---------------------------------------------------------------------------
 # Visual Style / Medium
 # ---------------------------------------------------------------------------
-# Controls the overall art direction.
-# Best practice: "Explicitly name your desired aesthetic to control the
-# visual mood."  — Google Nano Banana Pro prompting guide
-#
-# KEY = dropdown value the user selects
-# VALUE = phrase prepended to the prompt
-# ---------------------------------------------------------------------------
 visual_styles:
   photorealistic:  "A photorealistic photograph"
   3d_render:       "A high-quality 3D rendered image"
@@ -67,46 +56,83 @@ visual_styles:
   isometric:       "A perfectly isometric 3D scene"
 
 # ---------------------------------------------------------------------------
-# Logo Prominence
+# Camera Angle
 # ---------------------------------------------------------------------------
-# Maps user intent to descriptive language the model can reason about
-# when placing the logo.
+camera_angles:
+  eye_level:       "Straight-on eye-level perspective, natural and neutral."
+  low_angle:       "Low-angle shot looking upward, conveying power and authority."
+  high_angle:      "High-angle shot looking down, making the subject appear smaller."
+  birds_eye:       "Bird's-eye top-down view, looking straight down."
+  dutch_angle:     "Dutch angle with tilted frame, adding dynamism and tension."
+  worms_eye:       "Worm's-eye extreme low angle looking directly upward."
+  three_quarter:   "Three-quarter angle view, natural and flattering perspective."
+  over_shoulder:   "Over-the-shoulder framing, adding depth and context."
+
+# ---------------------------------------------------------------------------
+# Framing / Composition
+# ---------------------------------------------------------------------------
+framings:
+  close_up:        "Close-up shot, shallow depth of field, subject fills the frame."
+  extreme_close:   "Extreme close-up on fine detail, macro-level framing."
+  medium_shot:     "Medium shot from waist up, balanced between subject and environment."
+  wide:            "Wide-angle shot, expansive view showing the full environment."
+  full_body:       "Full-body shot showing the subject head to toe with surroundings."
+  rule_of_thirds:  "Subject placed at the left-third intersection, balanced negative space."
+  centered:        "Subject perfectly centered, symmetrical composition."
+  negative_space:  "Generous negative space around the subject for clean design."
+
+# ---------------------------------------------------------------------------
+# Lighting
+# ---------------------------------------------------------------------------
+lightings:
+  golden_hour:     "Warm golden-hour sunlight with long soft shadows."
+  blue_hour:       "Cool blue-hour twilight with deep, moody tones."
+  studio:          "Clean three-point studio lighting with soft shadows."
+  neon:            "Vibrant neon lighting with colorful reflections."
+  dramatic:        "Dramatic chiaroscuro lighting with high contrast."
+  soft_natural:    "Soft, diffused natural daylight."
+  backlit:         "Strong backlight creating a rim-light silhouette effect."
+  candlelight:     "Warm, intimate candlelight glow."
+  overcast:        "Even, diffused overcast lighting, no harsh shadows."
+  rim_light:       "Edge rim lighting highlighting the subject outline."
+
+# ---------------------------------------------------------------------------
+# Tone / Mood
+# ---------------------------------------------------------------------------
+tones:
+  warm:            "Warm, inviting, and friendly atmosphere."
+  cool:            "Cool, calm, and serene atmosphere."
+  energetic:       "High energy, vibrant, dynamic feel."
+  elegant:         "Sophisticated, refined, and luxurious mood."
+  playful:         "Fun, lighthearted, cheerful vibe."
+  dramatic:        "Intense, bold, high-impact emotional tone."
+  nostalgic:       "Sentimental, vintage-inspired warmth."
+  futuristic:      "Sleek, high-tech, forward-looking feel."
+  serene:          "Peaceful, tranquil, and meditative mood."
+  festive:         "Celebratory, joyful, holiday spirit."
+
+# ---------------------------------------------------------------------------
+# Color Grading
+# ---------------------------------------------------------------------------
+color_gradings:
+  natural:         "Natural, true-to-life colors with balanced saturation."
+  warm_tones:      "Warm color palette with golden, amber, and orange hues."
+  cool_tones:      "Cool color palette with blue, teal, and silver tones."
+  high_contrast:   "Rich, high-contrast colors with deep blacks and vivid highlights."
+  pastel:          "Soft pastel colors, muted and gentle."
+  desaturated:     "Slightly desaturated, understated, editorial color grade."
+  vibrant:         "Highly saturated, vivid, eye-catching colors."
+  monochrome:      "Black and white, or single-color tonal palette."
+  teal_orange:     "Cinematic teal-and-orange color grading."
+  purple_gold:     "Mobily brand-inspired deep purple and gold accents."
+  navy_cyan:       "Mobily brand-inspired deep navy and cyan accents."
+
+
+# ---------------------------------------------------------------------------
+# Logo Prominence
 # ---------------------------------------------------------------------------
 logo_sizes:
   small:  "a subtle, discreet watermark-sized logo placed unobtrusively"
   medium: "a clearly visible, standard-sized corporate logo"
   large:  "a prominent, bold hero-sized brand logo"
   none:   ""
-
-# ---------------------------------------------------------------------------
-# Composition / Camera Presets
-# ---------------------------------------------------------------------------
-# Best practice: "composition, camera movements, scene shots and framing"
-# Set to "" (empty) to let the model decide.
-# ---------------------------------------------------------------------------
-compositions:
-  default:         ""
-  close_up:        "Close-up shot, shallow depth of field, subject fills the frame."
-  wide:            "Wide-angle shot, expansive view showing the full environment."
-  medium:          "Medium shot, subject from the waist up with environmental context."
-  birds_eye:       "Bird's-eye / top-down view looking straight down."
-  low_angle:       "Low-angle shot looking upward, giving a powerful perspective."
-  isometric:       "Perfectly isometric 45° top-down view, no perspective distortion."
-  rule_of_thirds:  "Subject placed at the left-third intersection, balanced negative space."
-
-# ---------------------------------------------------------------------------
-# Lighting Presets
-# ---------------------------------------------------------------------------
-# Best practice: "Lighting dictates the mood"
-# Set to "" (empty) to let the model decide.
-# ---------------------------------------------------------------------------
-lightings:
-  default:      ""
-  golden_hour:  "Warm golden-hour sunlight with long soft shadows."
-  blue_hour:    "Cool blue-hour twilight with deep, moody tones."
-  studio:       "Clean three-point studio lighting with soft shadows."
-  neon:         "Vibrant neon lighting with colorful reflections on wet surfaces."
-  dramatic:     "Dramatic chiaroscuro lighting with high contrast between light and shadow."
-  soft_natural: "Soft, diffused natural daylight."
-  backlit:      "Strong backlight creating a rim-light silhouette effect."
-  candlelight:  "Warm, intimate candlelight glow."

@@ -3,11 +3,13 @@ Utilities — GCS helpers, Gemini API wrapper, and response parsing.
 """
 
 import re
+import io
 import uuid
 import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
+from PIL import Image
 from google.genai import types
 
 from src.config import (
@@ -167,3 +169,117 @@ def generate_image(
         )
 
     return GenerationResult(image_bytes=image_data, model_text=model_text)
+
+
+# ---------------------------------------------------------------------------
+# Logo Overlay (Pillow post-processing)
+# ---------------------------------------------------------------------------
+POSITION_MAP = {
+    "top_left":     (0.0, 0.0),
+    "top_center":   (0.5, 0.0),
+    "top_right":    (1.0, 0.0),
+    "center_left":  (0.0, 0.5),
+    "center":       (0.5, 0.5),
+    "center_right": (1.0, 0.5),
+    "bottom_left":  (0.0, 1.0),
+    "bottom_center":(0.5, 1.0),
+    "bottom_right": (1.0, 1.0),
+}
+
+# Margin as fraction of image dimensions
+_MARGIN_FRAC = 0.03
+
+
+def overlay_logo(
+    image_bytes: bytes,
+    logo_bytes: bytes,
+    position: str = "bottom_right",
+    logo_scale: float = 0.15,
+    opacity: float = 1.0,
+    padding: int | None = None,
+) -> bytes:
+    """Composite a logo onto a generated image using Pillow.
+
+    Parameters
+    ----------
+    image_bytes : bytes
+        The generated banner image (PNG/JPEG).
+    logo_bytes : bytes
+        The logo image (PNG with transparency recommended).
+    position : str
+        Placement key — one of POSITION_MAP keys.
+    logo_scale : float
+        Logo width as fraction of banner width (0.05–0.5). Default 0.15.
+    opacity : float
+        Logo opacity (0.0–1.0). Default 1.0 (fully opaque).
+    padding : int | None
+        Pixel padding from edges. If None, auto-calculated as 3% of image width.
+
+    Returns
+    -------
+    bytes
+        Composited image as PNG.
+    """
+    # Open images
+    banner = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    logo = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
+
+    bw, bh = banner.size
+
+    # Scale logo
+    logo_scale = max(0.05, min(0.5, logo_scale))
+    target_w = int(bw * logo_scale)
+    scale_ratio = target_w / logo.width
+    target_h = int(logo.height * scale_ratio)
+
+    # Cap height at 40% of banner
+    if target_h > bh * 0.4:
+        target_h = int(bh * 0.4)
+        scale_ratio = target_h / logo.height
+        target_w = int(logo.width * scale_ratio)
+
+    logo_resized = logo.resize((target_w, target_h), Image.LANCZOS)
+
+    # Apply opacity
+    if opacity < 1.0:
+        alpha = logo_resized.getchannel("A")
+        alpha = alpha.point(lambda a: int(a * opacity))
+        logo_resized.putalpha(alpha)
+
+    # Calculate position
+    pad = padding if padding is not None else int(bw * _MARGIN_FRAC)
+    anchor = POSITION_MAP.get(position, POSITION_MAP["bottom_right"])
+    ax, ay = anchor
+
+    # x position
+    if ax == 0.0:
+        x = pad
+    elif ax == 1.0:
+        x = bw - target_w - pad
+    else:
+        x = (bw - target_w) // 2
+
+    # y position
+    if ay == 0.0:
+        y = pad
+    elif ay == 1.0:
+        y = bh - target_h - pad
+    else:
+        y = (bh - target_h) // 2
+
+    # Composite
+    banner.paste(logo_resized, (x, y), logo_resized)
+
+    # Convert back to bytes
+    output = io.BytesIO()
+    # Save as PNG to preserve quality
+    banner_rgb = banner.convert("RGB")
+    banner_rgb.save(output, format="PNG", quality=95)
+    output.seek(0)
+
+    logger.info(
+        "Logo overlaid: pos=%s, scale=%.2f, logo=%dx%d → %dx%d on %dx%d banner",
+        position, logo_scale, logo.width, logo.height, target_w, target_h, bw, bh,
+    )
+
+    return output.read()

@@ -43,3 +43,12 @@ temp/
 # Uploaded test files
 uploads/
 outputs/
+# Ignore specific python files
+main.py
+video_main.py
+
+# Ignore specific config file
+config/video_config.yaml
+
+# Ignore specific helper file
+helpers/video_utils.py
