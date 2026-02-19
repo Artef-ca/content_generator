@@ -14,7 +14,10 @@ import uuid
 import logging
 import tempfile
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# Saudi Arabia timezone (UTC+3)
+_SAUDI_TZ = timezone(timedelta(hours=3))
 from dataclasses import dataclass
 
 from google.genai import types
@@ -22,7 +25,7 @@ from google.cloud import texttospeech
 
 from src.config import (
     BUCKET_NAME,
-    VIDEO_MODEL_ID,
+    VIDEO_MODEL_DEFAULTS,
     genai_client,
     gcs_client,
 )
@@ -75,7 +78,7 @@ def generate_video_output_uri(subject_hint: str, prefix: str = "videos") -> str:
 
     Format: gs://bucket/videos/YYYY-MM-DD/<slug>_<uuid>/
     """
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = datetime.now(_SAUDI_TZ).strftime("%Y-%m-%d")
     slug = _slugify(subject_hint) or "video"
     short_id = uuid.uuid4().hex[:8]
     return f"gs://{BUCKET_NAME}/{prefix}/{date_str}/{slug}_{short_id}/"
@@ -139,7 +142,7 @@ class ImageInput:
 
 def _upload_image_to_gcs(image: ImageInput, purpose: str = "input") -> str:
     """Upload image bytes to GCS and return the gs:// URI."""
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = datetime.now(_SAUDI_TZ).strftime("%Y-%m-%d")
     ext = "png" if "png" in image.mime_type else "jpg"
     slug = _slugify(image.filename or purpose, max_words=3)
     blob_path = f"video_inputs/{date_str}/{slug}_{uuid.uuid4().hex[:8]}.{ext}"
@@ -168,6 +171,7 @@ def generate_video(
     model_id: str | None = None,
     poll_interval: int = 15,
     max_wait: int = 600,
+    max_retries: int = 2,
 ) -> VideoGenerationResult:
     """Submit a Veo video generation request and poll until complete.
 
@@ -206,7 +210,7 @@ def generate_video(
     seed : int, optional
         For reproducible results (0-4294967295).
     """
-    model = model_id or VIDEO_MODEL_ID
+    model = model_id or VIDEO_MODEL_DEFAULTS["text_to_video"]
 
     # ── Build config ─────────────────────────────────────────────────────
     config = types.GenerateVideosConfig(
@@ -319,9 +323,39 @@ def generate_video(
         else:
             logger.info("operation.%s = (empty/None)", attr_name)
 
-    # Check for error
+    # Check for error — retry on transient failures (code 13 = INTERNAL)
     if operation.error:
-        raise RuntimeError(f"Veo generation failed: {operation.error}")
+        error_code = operation.error.get("code") if isinstance(operation.error, dict) else getattr(operation.error, "code", None)
+        error_msg = operation.error.get("message", str(operation.error)) if isinstance(operation.error, dict) else str(operation.error)
+        RETRYABLE_CODES = {13, 14}  # 13=INTERNAL, 14=UNAVAILABLE
+        if error_code in RETRYABLE_CODES and max_retries > 0:
+            logger.warning(
+                "Veo transient error (code=%s): %s — retrying (%d retries left)",
+                error_code, error_msg, max_retries,
+            )
+            time.sleep(5)
+            return generate_video(
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                duration_seconds=duration_seconds,
+                negative_prompt=negative_prompt,
+                generate_audio=generate_audio,
+                resolution=resolution,
+                number_of_videos=number_of_videos,
+                seed=seed,
+                generation_mode=generation_mode,
+                source_image_gcs_uri=source_image_gcs_uri,
+                source_image_mime=source_image_mime,
+                last_frame_gcs_uri=last_frame_gcs_uri,
+                last_frame_mime=last_frame_mime,
+                reference_images=reference_images,
+                output_gcs_uri=output_gcs_uri,
+                model_id=model_id,
+                poll_interval=poll_interval,
+                max_wait=max_wait,
+                max_retries=max_retries - 1,
+            )
+        raise RuntimeError(f"Veo generation failed (code {error_code}): {error_msg}")
 
     # ── Try to extract generated videos ──────────────────────────────────
     video_uri = None
@@ -376,7 +410,7 @@ def generate_video(
 
     # ── If we have inline bytes, upload to GCS ───────────────────────────
     if not video_uri and video_bytes:
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(_SAUDI_TZ).strftime("%Y-%m-%d")
         slug = _slugify(prompt[:60]) or "video"
         short_id = uuid.uuid4().hex[:8]
         blob_path = f"videos/{date_str}/{slug}_{short_id}.mp4"
@@ -591,71 +625,3 @@ def merge_audio_video(
 
         with open(out.name, "rb") as f:
             return f.read()
-
-
-def create_logo_card(
-    logo_bytes: bytes,
-    aspect_ratio: str = "16:9",
-    bg_color: str = "#FFFFFF",
-    logo_scale: float = 0.35,
-) -> bytes:
-    """Create a branded card image with the logo centred on a solid background.
-
-    The card is used as Veo's ``last_frame`` so the video naturally
-    transitions into a brand reveal — no ffmpeg needed.
-
-    Parameters
-    ----------
-    logo_bytes : bytes
-        Logo image (PNG with transparency recommended).
-    aspect_ratio : str
-        Target video ratio ("16:9" or "9:16"). Determines card dimensions.
-    bg_color : str
-        Hex colour for the card background (default white).
-    logo_scale : float
-        Logo width as fraction of card width (0.1–0.8). Default 0.35.
-
-    Returns
-    -------
-    bytes
-        PNG image bytes of the branded card (720p resolution).
-    """
-    from PIL import Image as PILImage
-
-    # Card dimensions to match video resolution
-    if aspect_ratio == "9:16":
-        card_w, card_h = 720, 1280
-    else:
-        card_w, card_h = 1280, 720
-
-    # Create solid background
-    card = PILImage.new("RGBA", (card_w, card_h), bg_color)
-
-    # Open logo and resize preserving aspect ratio
-    logo = PILImage.open(io.BytesIO(logo_bytes)).convert("RGBA")
-    target_w = int(card_w * max(0.1, min(0.8, logo_scale)))
-    ratio = target_w / logo.width
-    target_h = int(logo.height * ratio)
-
-    # Don't let the logo exceed 60% of card height
-    if target_h > int(card_h * 0.6):
-        target_h = int(card_h * 0.6)
-        ratio = target_h / logo.height
-        target_w = int(logo.width * ratio)
-
-    logo_resized = logo.resize((target_w, target_h), PILImage.LANCZOS)
-
-    # Centre the logo on the card
-    x = (card_w - target_w) // 2
-    y = (card_h - target_h) // 2
-    card.paste(logo_resized, (x, y), logo_resized)  # use alpha channel as mask
-
-    # Export as PNG bytes
-    buf = io.BytesIO()
-    card.save(buf, format="PNG")
-    buf.seek(0)
-    logger.info(
-        "Created logo card: %dx%d, logo=%dx%d, bg=%s",
-        card_w, card_h, target_w, target_h, bg_color,
-    )
-    return buf.read()

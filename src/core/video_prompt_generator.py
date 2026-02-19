@@ -33,6 +33,7 @@ from src.config import (
     CAMERA_MOVEMENT_MAP,
     LENS_EFFECT_MAP,
     VIDEO_STYLE_MAP,
+    VIDEO_TONE_MAP,
     TEMPORAL_MAP,
     SOUND_AMBIENCE_MAP,
 )
@@ -63,6 +64,7 @@ class VideoPromptInputs:
 
     # --- Style & Pacing ---
     visual_style: str = VIDEO_DEFAULTS["visual_style"]
+    tone: str = VIDEO_DEFAULTS.get("tone", "")
     temporal_elements: str = VIDEO_DEFAULTS["temporal_elements"]
 
     # --- Audio cues (embedded in prompt for Veo 3 native audio) ---
@@ -129,6 +131,11 @@ def build_video_prompt(inputs: VideoPromptInputs) -> str:
         clean_scene = _sanitise_for_veo(inputs.scene_context)
         if clean_scene:
             sections.append(f"Setting: {clean_scene}.")
+
+    # ── 5b. Tone / Mood ──────────────────────────────────────────────────
+    tone_desc = VIDEO_TONE_MAP.get(inputs.tone, "")
+    if tone_desc:
+        sections.append(tone_desc)
 
     # ── 6. Temporal / Pacing ─────────────────────────────────────────────
     temporal_desc = TEMPORAL_MAP.get(inputs.temporal_elements, "")

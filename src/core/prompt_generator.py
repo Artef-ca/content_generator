@@ -26,7 +26,6 @@ from src.config import (
     LIGHTING_MAP,
     TONE_MAP,
     COLOR_GRADING_MAP,
-    LOGO_SIZE_MAP,
 )
 
 _BRAND_STYLE = BRAND_CONFIG.get("style_context", "").strip()
@@ -53,10 +52,8 @@ class PromptInputs:
     color_grading: str = ""
 
     # 8. Brand Integration
-    logo_size: str = "none"
     campaign_text: str | None = None        # "رمضان كريم"
     text_style: str | None = None           # "bold modern sans-serif"
-    website_url: str | None = None          # "mobily.com.sa"
 
     # 9. Custom Variation
     custom_prompt: str = ""                 # free-text fine-tuning
@@ -65,12 +62,14 @@ class PromptInputs:
     negative_prompt: str | None = None
 
 
-def build_prompt(inputs: PromptInputs, has_logo: bool = False) -> str:
+def build_prompt(inputs: PromptInputs) -> str:
     """
     Assemble a production-quality image prompt from structured inputs.
 
     Style + Subject → Setting → Camera → Framing → Lighting → Tone →
-    Color → Brand → Custom → Constraints
+    Color → Campaign Text → Custom → Constraints
+
+    Note: Logo is handled by Pillow overlay, not in the prompt.
     """
     sections: list[str] = []
 
@@ -120,25 +119,13 @@ def build_prompt(inputs: PromptInputs, has_logo: bool = False) -> str:
     if color:
         sections.append(color)
 
-    # ── 8. Brand Integration ──────────────────────────────────────────────
-    if has_logo and inputs.logo_size != "none":
-        logo_desc = LOGO_SIZE_MAP.get(inputs.logo_size, LOGO_SIZE_MAP["medium"])
-        sections.append(
-            f"Brand Integration: Integrate the provided logo as {logo_desc}. "
-            "Choose the best placement so the logo does not obstruct the main subject."
-        )
-
+    # ── 8. Campaign Text ─────────────────────────────────────────────────
+    # Logo is overlaid by Pillow post-generation — not in prompt.
     if inputs.campaign_text:
         text_dir = inputs.text_style or DEFAULTS.get("text_style", "elegant typography")
         sections.append(
             f"Render the text '{inputs.campaign_text}' in {text_dir} "
             "that blends naturally with the overall design."
-        )
-
-    if inputs.website_url:
-        sections.append(
-            f"Display '{inputs.website_url}' in a small, clean, legible font "
-            "near the bottom as a subtle call-to-action."
         )
 
     # ── 9. Custom Variation ───────────────────────────────────────────────

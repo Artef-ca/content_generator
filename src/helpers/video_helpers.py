@@ -15,6 +15,7 @@ from src.config import (
     CAMERA_MOVEMENT_MAP,
     LENS_EFFECT_MAP,
     VIDEO_STYLE_MAP,
+    VIDEO_TONE_MAP,
     TEMPORAL_MAP,
     SOUND_AMBIENCE_MAP,
     VIDEO_ALLOWED_ASPECT_RATIOS,
@@ -71,7 +72,7 @@ def clean(val: str | None) -> str:
 # ---------------------------------------------------------------------------
 def validate_video_params(
     aspect_ratio, duration, resolution, num_videos,
-    camera_angle, camera_movement, lens_effect, visual_style, temporal,
+    camera_angle, camera_movement, lens_effect, visual_style, tone, temporal,
 ):
     errors = []
     if aspect_ratio not in VIDEO_ALLOWED_ASPECT_RATIOS:
@@ -90,6 +91,8 @@ def validate_video_params(
         errors.append(f"lens_effect: {list(LENS_EFFECT_MAP.keys())}")
     if visual_style and visual_style not in VIDEO_STYLE_MAP:
         errors.append(f"visual_style: {list(VIDEO_STYLE_MAP.keys())}")
+    if tone and tone not in VIDEO_TONE_MAP:
+        errors.append(f"tone: {list(VIDEO_TONE_MAP.keys())}")
     if temporal and temporal not in TEMPORAL_MAP:
         errors.append(f"temporal_elements: {list(TEMPORAL_MAP.keys())}")
     if errors:
@@ -102,7 +105,7 @@ def validate_video_params(
 def build_veo_prompt(
     subject, action, scene_context, prompt, dialogue,
     camera_angle, camera_movement, lens_effect, visual_style,
-    temporal_elements, sound_ambience, negative_prompt,
+    tone, temporal_elements, sound_ambience, negative_prompt,
     inject_dialogue=False,
 ) -> str:
     inputs = VideoPromptInputs(
@@ -113,6 +116,7 @@ def build_veo_prompt(
         camera_movement=camera_movement or VIDEO_DEFAULTS["camera_movement"],
         lens_effect=lens_effect or VIDEO_DEFAULTS["lens_effect"],
         visual_style=visual_style or VIDEO_DEFAULTS["visual_style"],
+        tone=tone or VIDEO_DEFAULTS.get("tone", ""),
         temporal_elements=temporal_elements or VIDEO_DEFAULTS["temporal_elements"],
         sound_ambience=sound_ambience or VIDEO_DEFAULTS["sound_ambience"],
         negative_prompt=negative_prompt,
@@ -142,9 +146,19 @@ async def prepare_end_frame(end_frame_image) -> tuple[str | None, str | None, di
 
 
 # ---------------------------------------------------------------------------
-# Audio
+# Audio — auto-detect mode from filled fields
 # ---------------------------------------------------------------------------
-async def handle_audio(audio_mode, tts_text, tts_language, audio_file, dialogue, video_uri):
+def detect_audio_mode(dialogue: str, tts_text: str, audio_file) -> str:
+    """Auto-detect audio mode: upload > tts > none."""
+    if audio_file and hasattr(audio_file, "read") and getattr(audio_file, "filename", None):
+        return "upload"
+    if tts_text or dialogue:
+        return "tts"
+    return "none"
+
+
+async def handle_audio(tts_text, tts_language, audio_file, dialogue, video_uri):
+    audio_mode = detect_audio_mode(dialogue, tts_text, audio_file)
     info: dict = {"mode": audio_mode}
     if audio_mode == "none":
         return video_uri, info
@@ -187,7 +201,7 @@ async def handle_audio(audio_mode, tts_text, tts_language, audio_file, dialogue,
 # Response builder
 # ---------------------------------------------------------------------------
 def video_response(
-    uri, model, mode, prompt, aspect, res, dur, n, seed,
+    uri, model, mode, prompt, aspect, res, dur, n,
     audio_info, end_frame_info, ref_fnames, op,
 ):
     return {
@@ -196,7 +210,7 @@ def video_response(
         "public_url": uri.replace(f"gs://{BUCKET_NAME}/", f"https://storage.googleapis.com/{BUCKET_NAME}/"),
         "model": model, "generation_mode": mode, "prompt_used": prompt,
         "aspect_ratio": aspect, "resolution": res, "duration_seconds": dur,
-        "number_of_videos": n, "seed": seed,
+        "number_of_videos": n,
         "audio": audio_info, "end_frame": end_frame_info,
         "reference_images": ref_fnames, "operation": op,
     }

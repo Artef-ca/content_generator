@@ -6,19 +6,71 @@ model:
   id: "gemini-3-pro-image-preview"
 
 # ---------------------------------------------------------------------------
-# Defaults
+# GCS Storage Prefixes
+# ---------------------------------------------------------------------------
+gcs_prefixes:
+  banners: "banners"
+  logos: "brand_assets/mobily/logos"
+  videos: "videos"
+  video_inputs: "video_inputs"
+  end_frames: "brand_assets/mobily/end_frames"
+  style_refs: "brand_assets/mobily/style_refs"
+  people: "brand_assets/mobily/people"
+  brand_profiles: "brand_assets"
+
+# ---------------------------------------------------------------------------
+# Defaults — pre-filled in Swagger UI
 # ---------------------------------------------------------------------------
 defaults:
-  visual_style: "photorealistic"
-  camera_angle: ""
-  framing: ""
-  lighting: ""
-  tone: ""
-  color_grading: ""
+  visual_style: "cinematic"
+  framing: "wide"
+  lighting: "soft_natural"
+  tone: "warm"
+  color_grading: "mobily_blue"
   logo_size: "small"
+  logo_position: "bottom_right"
   aspect_ratio: "16:9"
   image_size: "1K"
   text_style: "elegant typography"
+
+# ---------------------------------------------------------------------------
+# Field Labels — Swagger UI display names (Title Case)
+# ---------------------------------------------------------------------------
+field_labels:
+  # Image
+  subject: "Subject"
+  action: "Action"
+  items_in_scene: "Items In Scene"
+  setting: "Setting"
+  logo_file: "Logo File (PNG)"
+  logo_name: "Logo (From Library)"
+  logo_size: "Logo Size"
+  logo_position: "Logo Position"
+  campaign_text: "Visual Text"
+  text_style: "Visual Text Style"
+  framing: "Framing"
+  color_grading: "Color Palette"
+  lighting: "Lighting"
+  tone: "Tone / Mood"
+  visual_style: "Visual Style"
+  image_size: "Image Size"
+  aspect_ratio: "Image Size"
+  negative_prompt: "Negative Prompt (Avoid)"
+  # Video
+  scene_context: "Scene / Context"
+  camera_angle: "Camera Angle"
+  camera_movement: "Camera Movement"
+  lens_effect: "Lens Effect"
+  temporal_elements: "Video Motion"
+  sound_ambience: "Sound Ambience"
+  dialogue: "Dialogue / Voiceover"
+  tts_language: "Voice Language"
+  duration_seconds: "Duration (Seconds)"
+  resolution: "Resolution"
+  video_aspect_ratio: "Video Size"
+  number_of_videos: "Number Of Variants"
+  source_image: "Source Image"
+  end_frame_image: "End Frame Image"
 
 # ---------------------------------------------------------------------------
 # Allowed output options
@@ -41,7 +93,134 @@ allowed_image_sizes:
   - "4K"
 
 # ---------------------------------------------------------------------------
-# Visual Style / Medium
+# Mobily Brand Color Palette
+# Each entry: key → { hex, rgb, prompt_description }
+# Used as dropdown in frontend + injected into image/video prompts
+# ---------------------------------------------------------------------------
+mobily_palette:
+  # ── Primary ──────────────────────────────────────────────────
+  mobily_blue:
+    name: "Mobily Blue"
+    hex: "#1061FF"
+    rgb: [16, 97, 255]
+    group: "primary"
+    prompt: "Mobily Blue (#1061FF) — fresh vibrant blue, dominant brand color with energetic appeal."
+
+  mobily_bright_blue:
+    name: "Mobily Bright Blue"
+    hex: "#4BF5FF"
+    rgb: [75, 245, 255]
+    group: "primary"
+    prompt: "Mobily Bright Blue (#4BF5FF) — electric cyan-blue, vivid and eye-catching accent."
+
+  mobily_dark_blue:
+    name: "Mobily Dark Blue"
+    hex: "#000050"
+    rgb: [0, 0, 80]
+    group: "primary"
+    prompt: "Mobily Dark Blue (#000050) — deep navy, authoritative and premium feel."
+
+  white:
+    name: "White"
+    hex: "#FFFFFF"
+    rgb: [255, 255, 255]
+    group: "primary"
+    prompt: "Clean white (#FFFFFF) — crisp, modern, minimal background with maximum contrast."
+
+  # ── Bright Accents ───────────────────────────────────────────
+  mobily_green:
+    name: "Mobily Green"
+    hex: "#00E66E"
+    rgb: [0, 230, 110]
+    group: "bright_accent"
+    prompt: "Mobily Green (#00E66E) — fresh vibrant green, energetic and lively accent."
+
+  mobily_yellow:
+    name: "Mobily Yellow"
+    hex: "#FFDC00"
+    rgb: [255, 220, 0]
+    group: "bright_accent"
+    prompt: "Mobily Yellow (#FFDC00) — bold warm yellow, cheerful and attention-grabbing."
+
+  mobily_orange:
+    name: "Mobily Orange"
+    hex: "#FF5A3C"
+    rgb: [255, 90, 60]
+    group: "bright_accent"
+    prompt: "Mobily Orange (#FF5A3C) — warm coral-orange, energetic and vibrant call-to-action."
+
+  # ── Dark Secondary ───────────────────────────────────────────
+  mobily_dark_green:
+    name: "Mobily Dark Green"
+    hex: "#002D0A"
+    rgb: [0, 45, 10]
+    group: "dark_secondary"
+    prompt: "Mobily Dark Green (#002D0A) — deep forest green, rich and grounded."
+
+  mobily_dark_yellow:
+    name: "Mobily Dark Yellow"
+    hex: "#4B1E00"
+    rgb: [75, 30, 0]
+    group: "dark_secondary"
+    prompt: "Mobily Dark Yellow (#4B1E00) — deep amber-brown, warm and earthy."
+
+  mobily_burgundy:
+    name: "Mobily Burgundy"
+    hex: "#41001E"
+    rgb: [65, 0, 30]
+    group: "dark_secondary"
+    prompt: "Mobily Burgundy (#41001E) — deep wine red, luxurious and sophisticated."
+
+  # ── Gradients ────────────────────────────────────────────────
+  gradient_blue_bright:
+    name: "Gradient: Blue → Bright Blue"
+    hex: "#1061FF"
+    hex_end: "#4BF5FF"
+    rgb: [16, 97, 255]
+    group: "gradient"
+    prompt: "Smooth gradient from Mobily Blue (#1061FF) to Bright Blue (#4BF5FF) — fresh energetic flow."
+
+  gradient_blue_dark:
+    name: "Gradient: Blue → Dark Blue"
+    hex: "#1061FF"
+    hex_end: "#000050"
+    rgb: [16, 97, 255]
+    group: "gradient"
+    prompt: "Smooth gradient from Mobily Blue (#1061FF) to Dark Blue (#000050) — deep professional transition."
+
+  gradient_bright_blue:
+    name: "Gradient: Bright Blue → Blue"
+    hex: "#4BF5FF"
+    hex_end: "#1061FF"
+    rgb: [75, 245, 255]
+    group: "gradient"
+    prompt: "Smooth gradient from Bright Blue (#4BF5FF) to Mobily Blue (#1061FF) — cool to warm blue flow."
+
+# ---------------------------------------------------------------------------
+# Color Grading — maps palette keys to prompt fragments for image generation
+# ---------------------------------------------------------------------------
+color_gradings:
+  mobily_blue:          "Dominant Mobily Blue (#1061FF) color palette — vibrant blue tones with fresh energetic feel."
+  mobily_bright_blue:   "Bright cyan-blue (#4BF5FF) color palette — electric and vivid, light and airy."
+  mobily_dark_blue:     "Deep Mobily Dark Blue (#000050) palette — rich navy tones, premium and authoritative."
+  white:                "Clean white-dominant palette — crisp, modern, high contrast with minimal color."
+  mobily_green:         "Vibrant Mobily Green (#00E66E) accents — fresh, lively, nature-inspired energy."
+  mobily_yellow:        "Bold Mobily Yellow (#FFDC00) accents — warm, cheerful, attention-grabbing sunshine."
+  mobily_orange:        "Warm Mobily Orange (#FF5A3C) accents — coral-orange energy, dynamic warmth."
+  mobily_dark_green:    "Deep forest green (#002D0A) palette — rich, grounded, earthy sophistication."
+  mobily_dark_yellow:   "Deep amber-brown (#4B1E00) palette — warm, earthy, heritage tones."
+  mobily_burgundy:      "Deep wine burgundy (#41001E) palette — luxurious, sophisticated, premium warmth."
+  gradient_blue_bright: "Gradient from Mobily Blue to Bright Blue — fresh energetic flow of blues."
+  gradient_blue_dark:   "Gradient from Mobily Blue to Dark Blue — deep professional blue transition."
+  gradient_bright_blue: "Gradient from Bright Blue to Mobily Blue — cool cyan to warm blue flow."
+  natural:              "Natural, true-to-life colors with balanced saturation."
+  high_contrast:        "Rich, high-contrast colors with deep blacks and vivid highlights."
+  pastel:               "Soft pastel colors, muted and gentle."
+  vibrant:              "Highly saturated, vivid, eye-catching colors."
+  monochrome:           "Black and white, or single-color tonal palette."
+
+# ---------------------------------------------------------------------------
+# Visual Styles
 # ---------------------------------------------------------------------------
 visual_styles:
   photorealistic:  "A photorealistic photograph"
@@ -56,7 +235,7 @@ visual_styles:
   isometric:       "A perfectly isometric 3D scene"
 
 # ---------------------------------------------------------------------------
-# Camera Angle
+# Camera Angles
 # ---------------------------------------------------------------------------
 camera_angles:
   eye_level:       "Straight-on eye-level perspective, natural and neutral."
@@ -69,7 +248,7 @@ camera_angles:
   over_shoulder:   "Over-the-shoulder framing, adding depth and context."
 
 # ---------------------------------------------------------------------------
-# Framing / Composition
+# Framings
 # ---------------------------------------------------------------------------
 framings:
   close_up:        "Close-up shot, shallow depth of field, subject fills the frame."
@@ -82,7 +261,7 @@ framings:
   negative_space:  "Generous negative space around the subject for clean design."
 
 # ---------------------------------------------------------------------------
-# Lighting
+# Lightings
 # ---------------------------------------------------------------------------
 lightings:
   golden_hour:     "Warm golden-hour sunlight with long soft shadows."
@@ -97,7 +276,7 @@ lightings:
   rim_light:       "Edge rim lighting highlighting the subject outline."
 
 # ---------------------------------------------------------------------------
-# Tone / Mood
+# Tones
 # ---------------------------------------------------------------------------
 tones:
   warm:            "Warm, inviting, and friendly atmosphere."
@@ -110,29 +289,3 @@ tones:
   futuristic:      "Sleek, high-tech, forward-looking feel."
   serene:          "Peaceful, tranquil, and meditative mood."
   festive:         "Celebratory, joyful, holiday spirit."
-
-# ---------------------------------------------------------------------------
-# Color Grading
-# ---------------------------------------------------------------------------
-color_gradings:
-  natural:         "Natural, true-to-life colors with balanced saturation."
-  warm_tones:      "Warm color palette with golden, amber, and orange hues."
-  cool_tones:      "Cool color palette with blue, teal, and silver tones."
-  high_contrast:   "Rich, high-contrast colors with deep blacks and vivid highlights."
-  pastel:          "Soft pastel colors, muted and gentle."
-  desaturated:     "Slightly desaturated, understated, editorial color grade."
-  vibrant:         "Highly saturated, vivid, eye-catching colors."
-  monochrome:      "Black and white, or single-color tonal palette."
-  teal_orange:     "Cinematic teal-and-orange color grading."
-  purple_gold:     "Mobily brand-inspired deep purple and gold accents."
-  navy_cyan:       "Mobily brand-inspired deep navy and cyan accents."
-
-
-# ---------------------------------------------------------------------------
-# Logo Prominence
-# ---------------------------------------------------------------------------
-logo_sizes:
-  small:  "a subtle, discreet watermark-sized logo placed unobtrusively"
-  medium: "a clearly visible, standard-sized corporate logo"
-  large:  "a prominent, bold hero-sized brand logo"
-  none:   ""
