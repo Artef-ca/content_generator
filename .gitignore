@@ -46,6 +46,8 @@ outputs/
 # Ignore specific python files
 main.py
 video_main.py
+#ignore specific markdown files
+claude prompt.md
 
 # Ignore specific config file
 config/video_config.yaml

@@ -1,0 +1,33 @@
+substitutions:
+  _REGION: "me-central2"
+  _REPO: "image-video-content-generation"
+  _SERVICE: "image-video-api"
+  _IMAGE: "image-video-api"
+  _TAG: "latest"
+
+steps:
+- name: "gcr.io/cloud-builders/docker"
+  args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}", "."]
+
+- name: "gcr.io/cloud-builders/docker"
+  args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}"]
+
+- name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+  entrypoint: gcloud
+  args:
+    [
+      "run","deploy","${_SERVICE}",
+      "--image","${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}",
+      "--region","${_REGION}",
+      "--platform","managed",
+      "--allow-unauthenticated",
+      "--port","8080",
+      "--memory","2Gi",
+      "--cpu","2",
+      "--timeout","300",
+      "--set-env-vars",
+      "PORT=8080,GCP_LOCATION=${_REGION},GCP_PROJECT_ID=$PROJECT_ID,GCS_BUCKET=content_creation_data"
+    ]
+
+images:
+- "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}"

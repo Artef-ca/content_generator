@@ -145,7 +145,8 @@ def build_video_prompt(inputs: VideoPromptInputs) -> str:
     # ── 7. Audio Direction ───────────────────────────────────────────────
     # Following Veo best practices: use "Audio:" label for ambient cues
     # and quotation marks for dialogue.
-    ambience_desc = SOUND_AMBIENCE_MAP.get(inputs.sound_ambience, "")
+    ambience_desc = SOUND_AMBIENCE_MAP.get(inputs.sound_ambience) or inputs.sound_ambience
+
     if ambience_desc:
         sections.append(f"Audio: {ambience_desc}.")
 

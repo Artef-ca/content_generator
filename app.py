@@ -15,7 +15,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse , Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import (
@@ -466,7 +466,6 @@ async def reference_to_video(
 async def refine_video_endpoint(
     source_video: UploadFile = File(..., title="Source Video", description="Video to refine or extend."),
     edit_prompt: str = Form(..., title="Edit Instructions", description="What to change or extend."),
-    duration_seconds: int = Form(VIDEO_DEFAULTS["duration_seconds"], title="Duration (Seconds)"),
     video_size: str = Form(VIDEO_DEFAULTS["aspect_ratio"], title="Video Size"),
     resolution: str = Form(VIDEO_DEFAULTS["resolution"], title="Resolution"),
 ):
@@ -481,7 +480,7 @@ async def refine_video_endpoint(
     model = VIDEO_MODEL_DEFAULTS["refine_video"]
     result = generate_video(
         prompt=edit_prompt, aspect_ratio=video_size,
-        duration_seconds=duration_seconds,
+        duration_seconds=7,  # extend_video only supports 7s
         negative_prompt=effective_negative(""), generate_audio=True,
         resolution=resolution, number_of_videos=1, seed=None,
         generation_mode="extend_video",
@@ -533,6 +532,53 @@ async def list_logos():
         return {"logos": list_gcs_logos()}
     except Exception as e:
         return {"logos": [], "error": str(e)}
+    
+@app.get("/logos/{name}", tags=["Brand Assets"],
+         summary="Serve Logo Image From GCS")
+async def get_logo_image(name: str):
+    """Proxy-serve a logo image directly from GCS so the frontend can display it."""
+    try:
+        logo_bytes = download_gcs_logo(name)
+        if not logo_bytes:
+            raise HTTPException(404, f"Logo '{name}' not found.")
+        lower = name.lower()
+        if lower.endswith(".png"):
+            ct = "image/png"
+        elif lower.endswith(".svg"):
+            ct = "image/svg+xml"
+        elif lower.endswith(".webp"):
+            ct = "image/webp"
+        else:
+            ct = "image/jpeg"
+        return Response(content=logo_bytes, media_type=ct,
+                        headers={"Cache-Control": "public, max-age=3600"})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.get("/content", tags=["System"], summary="Proxy GCS Content (Images & Videos)")
+async def serve_gcs_content(gcs_uri: str):
+    """Fetch any private GCS object and stream it to the frontend (images, videos)."""
+    if not gcs_uri.startswith("gs://"):
+        raise HTTPException(400, "Invalid GCS URI — must start with gs://")
+    remainder = gcs_uri[5:]
+    if "/" not in remainder:
+        raise HTTPException(400, "Invalid GCS URI — missing bucket/path separator")
+    bucket_name, blob_path = remainder.split("/", 1)
+    try:
+        data = gcs_client.bucket(bucket_name).blob(blob_path).download_as_bytes()
+    except Exception as e:
+        raise HTTPException(404, f"GCS object not found: {e}")
+    ext = blob_path.rsplit(".", 1)[-1].lower() if "." in blob_path else ""
+    ct = {
+        "mp4": "video/mp4", "webm": "video/webm",
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "webp": "image/webp", "svg": "image/svg+xml",
+    }.get(ext, "application/octet-stream")
+    return Response(content=data, media_type=ct,
+                    headers={"Cache-Control": "public, max-age=3600"})
+
 
 
 @app.get("/options", tags=["System"], summary="Image Dropdown Values")
@@ -575,3 +621,5 @@ async def brand_assets():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=True)
+
+

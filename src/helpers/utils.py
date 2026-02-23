@@ -18,7 +18,7 @@ from google.genai import types
 from src.config import (
     BUCKET_NAME,
     MODEL_ID,
-    BRAND_CONFIG,
+    GCS_PREFIXES,       # ← replaces BRAND_CONFIG
     genai_client,
     gcs_client,
 )
@@ -26,11 +26,7 @@ from src.config import (
 logger = logging.getLogger("creative_studio")
 
 # GCS path for brand logos
-_LOGO_GCS_PREFIX = BRAND_CONFIG.get("assets_gcs_prefix", "gs://content_creation_data/brand_assets/mobily/") + "logos/"
-# Strip gs://bucket/ to get the blob prefix
-_LOGO_BLOB_PREFIX = _LOGO_GCS_PREFIX.replace(f"gs://{BUCKET_NAME}/", "")
-
-
+_LOGO_BLOB_PREFIX = GCS_PREFIXES["logos"] + "/"
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -88,7 +84,6 @@ def list_gcs_logos() -> list[dict]:
         })
     logger.info("Listed %d logos from %s", len(logos), _LOGO_BLOB_PREFIX)
     return logos
-
 
 def download_gcs_logo(logo_name: str) -> bytes | None:
     """Download a logo by name from the brand assets GCS folder.

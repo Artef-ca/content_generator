@@ -10,12 +10,12 @@ model:
 # ---------------------------------------------------------------------------
 gcs_prefixes:
   banners: "banners"
-  logos: "brand_assets/mobily/logos"
+  logos: "brand_assets/logos"
   videos: "videos"
   video_inputs: "video_inputs"
-  end_frames: "brand_assets/mobily/end_frames"
-  style_refs: "brand_assets/mobily/style_refs"
-  people: "brand_assets/mobily/people"
+  end_frames: "brand_assets/end_frames"
+  style_refs: "brand_assets/style_refs"
+  people: "brand_assets/people"
   brand_profiles: "brand_assets"
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,6 @@ field_labels:
   tone: "Tone / Mood"
   visual_style: "Visual Style"
   image_size: "Image Size"
-  aspect_ratio: "Image Size"
   negative_prompt: "Negative Prompt (Avoid)"
   # Video
   scene_context: "Scene / Context"
