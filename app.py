@@ -37,7 +37,7 @@ from src.config import (
     VIDEO_STYLE_MAP, TEMPORAL_MAP, SOUND_AMBIENCE_MAP,
     VIDEO_ALLOWED_ASPECT_RATIOS, ALLOWED_DURATIONS, ALLOWED_RESOLUTIONS,
     ALLOWED_TTS_LANGUAGES,
-    gcs_client, logger,genai_client,PROJECT_ID
+    gcs_client, logger,genai_client,PROJECT_ID,FONTS
 )
 from src.core.prompt_generator import PromptInputs, build_prompt
 from src.helpers.utils import (
@@ -150,6 +150,10 @@ async def generate_image_endpoint(
     # ── Visual Text ───────────────────────────────────────────────────
     visual_text: str = Form("", title="Visual Text", description="Text to render on the image."),
     visual_text_style: str = Form(DEFAULTS["text_style"], title="Visual Text Style", description="Typography style for visual text."),
+    # ── Rich Text / Comments ──────────────────────────────────────────────
+    text_blocks: str = Form("", title="Text Blocks", description="JSON array of text blocks with per-block color, weight, position, language and size."),
+    logo_comments: str = Form("", title="Logo Comments", description="Additional logo instructions appended to AI prompt."),
+    specs_comments: str = Form("", title="Specs Comments", description="Composition and technical requirements."),
     # ── Creative Controls ─────────────────────────────────────────────
     framing: str = Form(DEFAULTS["framing"], title="Framing"),
     color_grading: str = Form(DEFAULTS["color_grading"], title="Color Grading"),
@@ -203,6 +207,14 @@ async def generate_image_endpoint(
         except Exception as e:
             logger.exception("Logo GCS error: %s", e)
 
+    # ── Parse rich text blocks ────────────────────────────────────────
+    parsed_blocks: list = []
+    if text_blocks:
+        try:
+            parsed_blocks = json.loads(text_blocks)
+        except Exception:
+            parsed_blocks = []
+
     # ── Build prompt ─────────────────────────────────────────────────
     # Map Swagger names → PromptInputs names
     inputs = PromptInputs(
@@ -215,8 +227,11 @@ async def generate_image_endpoint(
         lighting=lighting,
         tone=tone,
         color_grading=color_grading,
-        campaign_text=visual_text or None,          # ← FIX #2: Swagger "Visual Text" → internal campaign_text
-        text_style=visual_text_style or None,       # ← FIX #2: Swagger "Visual Text Style" → internal text_style
+        text_blocks=parsed_blocks,
+        campaign_text=visual_text or None,          # ← legacy fallback when text_blocks is empty
+        text_style=visual_text_style or None,       # ← legacy fallback
+        specs_comments=specs_comments,
+        logo_comments=logo_comments,
         custom_prompt="",
         negative_prompt=negative_prompt or None,
     )
@@ -226,11 +241,11 @@ async def generate_image_endpoint(
     # ── Generate ─────────────────────────────────────────────────────
     try:
         result = generate_image(
-            prompt=final_prompt,
-            aspect_ratio=image_size,    # ← FIX #3: Swagger "Image Size" → Gemini aspect_ratio
-            image_size=resolution,      # ← Swagger "Resolution" → Gemini image_size (1K/2K/4K)
-            reference_images=None,
-        )
+    prompt=final_prompt,
+    aspect_ratio=image_size,
+    image_size=resolution,
+    reference_images=[(logo_bytes, "image/png")] if (has_logo and logo_bytes and logo_comments) else None,
+)
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     except Exception as e:
@@ -240,7 +255,7 @@ async def generate_image_endpoint(
     # ── Overlay logo ─────────────────────────────────────────────────
     final_image = result.image_bytes
     logo_info = {"applied": False}
-    if has_logo and logo_bytes:
+    if has_logo and logo_bytes and not logo_comments:
         try:
             final_image = overlay_logo(
                 image_bytes=result.image_bytes, logo_bytes=logo_bytes,
@@ -251,6 +266,8 @@ async def generate_image_endpoint(
         except Exception as e:
             logger.exception("Logo overlay failed")
             logo_info = {"applied": False, "error": str(e)}
+    elif has_logo and logo_comments:
+        logo_info = {"applied": True, "method": "llm_placed", "source": logo_source}
 
     # ── Upload ───────────────────────────────────────────────────────
     output_path = generate_output_path(subject, prefix=GCS_PREFIXES.get("banners", "banners"))
@@ -289,9 +306,17 @@ async def refine_image_endpoint(
 
     mime = getattr(source_image, "content_type", "image/png") or "image/png"
 
+    # Wrap user instructions with logo-preservation template so the model
+    # only changes what was explicitly requested and leaves everything else intact.
+    final_edit_prompt = (
+        f"{edit_prompt.strip()} "
+        "Preserve the Mobily logo exactly as placed — only change what is explicitly requested. "
+        "Do not alter any other elements of the image that were not mentioned above."
+    )
+
     try:
         result = generate_image(
-            prompt=edit_prompt,
+            prompt=final_edit_prompt,
             aspect_ratio=image_size,
             image_size=resolution,
             reference_images=[(img_data, mime)],
@@ -307,7 +332,7 @@ async def refine_image_endpoint(
 
     return JSONResponse(content={
         "status": "success", "gcs_uri": gcs_result.gcs_uri, "public_url": gcs_result.public_url,
-        "model": MODEL_ID, "prompt_used": edit_prompt,
+        "model": MODEL_ID, "prompt_used": final_edit_prompt,
         "original_image_source": getattr(source_image, "filename", ""),
         "model_commentary": result.model_text, "api_version": _VERSION,
     })
@@ -656,6 +681,7 @@ async def image_options():
         "logo_positions": list(POSITION_MAP.keys()),
         "image_sizes": ALLOWED_ASPECT_RATIOS,
         "resolutions": ALLOWED_IMAGE_SIZES,
+        "fonts": FONTS,
     }
 
 

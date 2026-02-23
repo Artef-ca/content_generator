@@ -64,6 +64,7 @@ def label(field_name: str) -> str:
 MODEL_ID: str = _yaml["model"]["id"]
 DEFAULTS: dict = _yaml["defaults"]
 VISUAL_TEXT_FONT: str = DEFAULTS.get("visual_text_font", "Arial")
+FONTS: list[dict] = _yaml.get("fonts", [{"value": "Arial", "label": "Arial"}])
 ALLOWED_ASPECT_RATIOS: list[str] = _yaml["allowed_aspect_ratios"]
 ALLOWED_IMAGE_SIZES: list[str] = _yaml["allowed_image_sizes"]
 VISUAL_STYLE_MAP: dict[str, str] = _yaml["visual_styles"]
