@@ -26,6 +26,7 @@ from src.config import (
     LIGHTING_MAP,
     TONE_MAP,
     COLOR_GRADING_MAP,
+    VISUAL_TEXT_FONT,
 )
 
 _BRAND_STYLE = BRAND_CONFIG.get("style_context", "").strip()
@@ -124,8 +125,8 @@ def build_prompt(inputs: PromptInputs) -> str:
     if inputs.campaign_text:
         text_dir = inputs.text_style or DEFAULTS.get("text_style", "elegant typography")
         sections.append(
-            f"Render the text '{inputs.campaign_text}' in {text_dir} "
-            "that blends naturally with the overall design."
+            f"Render the text '{inputs.campaign_text}' using {VISUAL_TEXT_FONT} font, "
+            f"in {text_dir} style, that blends naturally with the overall design."
         )
 
     # ── 9. Custom Variation ───────────────────────────────────────────────

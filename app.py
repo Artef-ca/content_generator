@@ -11,12 +11,20 @@ Field name mapping (Swagger title → internal variable → downstream):
   "Video Motion"     → video_motion  → build_veo_prompt temporal_elements param
 """
 
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse , Response
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional, List
+from google.genai import types
+import time
+from datetime import timedelta
+import json
+from src.schemas import (TrendingEvent, TrendingEventsResponse)
+from src.helpers.utils import (get_trending_events, get_trending_events_cached)
+
+
 
 from src.config import (
     PORT, BUCKET_NAME, MODEL_ID, DEFAULTS, GCS_PREFIXES,
@@ -29,7 +37,7 @@ from src.config import (
     VIDEO_STYLE_MAP, TEMPORAL_MAP, SOUND_AMBIENCE_MAP,
     VIDEO_ALLOWED_ASPECT_RATIOS, ALLOWED_DURATIONS, ALLOWED_RESOLUTIONS,
     ALLOWED_TTS_LANGUAGES,
-    gcs_client, logger,
+    gcs_client, logger,genai_client,PROJECT_ID
 )
 from src.core.prompt_generator import PromptInputs, build_prompt
 from src.helpers.utils import (
@@ -47,6 +55,18 @@ from src.schema.responses import (                           # ← FIX #1: was s
     ImageGenerationResponse, VideoGenerationResponse,
     RefineImageResponse, RefineVideoResponse, HealthResponse,
 )
+from pydantic import BaseModel
+
+from datetime import timedelta
+from fastapi import HTTPException, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.core.auth import (
+    UserCreate, UserLogin, UserResponse, Token,
+    get_user_by_username, create_user, authenticate_user,
+    create_access_token, get_current_user,
+    ACCESS_TOKEN_EXPIRE_MINUTES
+)
+from src.core.database import get_db, User
 
 _VERSION = "4.1.1"
 
@@ -59,6 +79,49 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Mobily Creative Studio", version=_VERSION, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+###auth
+# @app.post("/api/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+# async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+#     existing_user = await get_user_by_username(db, user_data.username)
+#     if existing_user:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Username already registered"
+#         )
+#     user = await create_user(db, user_data)
+#     return user
+
+
+# @app.post("/api/auth/login", response_model=Token)
+# async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
+#     user = await authenticate_user(db, user_data.username, user_data.password)
+#     if not user:
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED,
+#             detail="Incorrect username or password",
+#             headers={"WWW-Authenticate": "Bearer"},
+#         )
+#     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+#     access_token = create_access_token(
+#         data={"sub": str(user.id), "username": user.username},
+#         expires_delta=access_token_expires
+#     )
+#     return Token(access_token=access_token)
+
+
+# @app.get("/api/auth/me", response_model=UserResponse)
+# async def get_me(current_user: User = Depends(get_current_user)):
+#     return current_user
+
+###trending events
+
+@app.get("/api/trending-events", response_model=TrendingEventsResponse)
+async def trending_events_endpoint():
+    try:
+        events = get_trending_events_cached()
+        return TrendingEventsResponse(events=events)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trending events: {str(e)}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  TEXT-TO-IMAGE

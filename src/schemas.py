@@ -14,6 +14,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from src.config import VIDEO_DEFAULTS
+from typing import Optional, List
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -299,3 +301,16 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     endpoints: list[str]
+
+
+# Models
+# ---------------------------------------------------------------------------
+class TrendingEvent(BaseModel):
+    name: str
+    date: str
+    category: str
+    description: str
+
+
+class TrendingEventsResponse(BaseModel):
+    events: List[TrendingEvent]

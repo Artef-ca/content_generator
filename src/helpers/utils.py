@@ -22,8 +22,13 @@ from src.config import (
     genai_client,
     gcs_client,
 )
-
+from typing import Optional, List
+import json
 logger = logging.getLogger("creative_studio")
+from src.schemas import (TrendingEvent, TrendingEventsResponse)
+
+import time
+from datetime import datetime, timedelta
 
 # GCS path for brand logos
 _LOGO_BLOB_PREFIX = GCS_PREFIXES["logos"] + "/"
@@ -306,3 +311,76 @@ def overlay_logo(
         position, size, scale * 100, logo.width, logo.height, target_w, target_h, bw, bh,
     )
     return output.read()
+
+
+# Core functions
+# ---------------------------------------------------------------------------
+def get_trending_events() -> List[TrendingEvent]:
+    """Fetch trending events using Gemini with Google Search."""
+    today = datetime.now()
+    three_months_later = today + timedelta(days=90)
+
+    prompt = f"""
+    Today's date is {today.strftime('%B %d, %Y')}.
+    Find 4-5 major upcoming events or festivals in Saudi Arabia between
+    {today.strftime('%B %Y')} and {three_months_later.strftime('%B %Y')}.
+    Focus on events suitable for marketing campaigns (entertainment, technology, culture, sports).
+    Only include events happening in 2026 or later.
+
+    Return JSON list where each item has:
+    - name: Event name
+    - date: Date or date range
+    - category: One of [Entertainment, Technology, Sports, Culture, Shopping]
+    - description: A short one-line description
+    """
+
+    try:
+        response = genai_client.models.generate_content(  # ← uses config.py client
+            model=MODEL_ID,                               # ← uses config.py MODEL_ID
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.5,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                response_mime_type="application/json",
+                response_schema=TrendingEventsResponse
+            )
+        )
+
+        if response.parsed:
+            return response.parsed.events
+
+        if response.text:
+            try:
+                clean_text = response.text.replace('```json', '').replace('```', '').strip()
+                data = json.loads(clean_text)
+                if "events" in data:
+                    return [TrendingEvent(**e) for e in data["events"]]
+            except Exception:
+                pass
+
+        return []
+    except Exception as e:
+        print(f"GenAI Search Error: {e}")
+        return []
+# ---------------------------------------------------------------------------
+_trending_events_cache: Optional[List[TrendingEvent]] = None
+_trending_events_cache_time: float = 0
+TRENDING_EVENTS_CACHE_TTL = 12 * 60 * 60  # 12 hours
+
+def get_trending_events_cached() -> List[TrendingEvent]:
+
+    global _trending_events_cache, _trending_events_cache_time
+    current_time = time.time()
+
+    if (_trending_events_cache is not None and
+            current_time - _trending_events_cache_time < TRENDING_EVENTS_CACHE_TTL):
+        return _trending_events_cache
+
+    try:
+        _trending_events_cache = get_trending_events()
+        _trending_events_cache_time = current_time
+        return _trending_events_cache
+    except Exception as e:
+        print(f"[ERROR] Failed to refresh trending events cache: {e}")
+        return _trending_events_cache if _trending_events_cache is not None else []
+

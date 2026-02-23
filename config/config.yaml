@@ -32,6 +32,7 @@ defaults:
   aspect_ratio: "16:9"
   image_size: "1K"
   text_style: "elegant typography"
+  visual_text_font: "Arial"
 
 # ---------------------------------------------------------------------------
 # Field Labels — Swagger UI display names (Title Case)
