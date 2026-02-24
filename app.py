@@ -467,17 +467,25 @@ async def text_to_video(
                           inject_dialogue=False)
 
     model = VIDEO_MODEL_DEFAULTS["text_to_video"]
-    result = generate_video(
-        prompt=fp, aspect_ratio=video_size, duration_seconds=duration_seconds,
-        negative_prompt=effective_negative(negative_prompt), generate_audio=True,
-        resolution=resolution, number_of_videos=number_of_videos, seed=None,
-        generation_mode="text_to_video",
-        output_gcs_uri=generate_video_output_uri(subject), model_id=model,
-    )
-    uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
-    return video_response(uri, model, "text_to_video", fp, video_size, resolution,
-                          duration_seconds, number_of_videos, audio_info,
-                          {"applied": False}, [], result.operation_name)
+    try:
+        result = generate_video(
+            prompt=fp, aspect_ratio=video_size, duration_seconds=duration_seconds,
+            negative_prompt=effective_negative(negative_prompt), generate_audio=True,
+            resolution=resolution, number_of_videos=number_of_videos, seed=None,
+            generation_mode="text_to_video",
+            output_gcs_uri=generate_video_output_uri(subject), model_id=model,
+        )
+        uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
+        return video_response(uri, model, "text_to_video", fp, video_size, resolution,
+                              duration_seconds, number_of_videos, audio_info,
+                              {"applied": False}, [], result.operation_name)
+    except RuntimeError as e:
+        msg = str(e)
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        raise HTTPException(status_code=code, detail=msg)
+    except Exception as e:
+        logger.exception("text_to_video failed")
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -539,18 +547,26 @@ async def image_to_video(
     model_key = "image_to_video_endframe" if ef_uri else "image_to_video"
     model = VIDEO_MODEL_DEFAULTS[model_key]
 
-    result = generate_video(
-        prompt=fp, aspect_ratio=video_size, duration_seconds=duration_seconds,
-        negative_prompt=effective_negative(negative_prompt), generate_audio=True,
-        resolution=resolution, number_of_videos=number_of_videos, seed=None,
-        generation_mode="image_to_video", source_image_gcs_uri=image_uri,
-        source_image_mime=img.mime_type, last_frame_gcs_uri=ef_uri, last_frame_mime=ef_mime,
-        output_gcs_uri=generate_video_output_uri(action or "animated"), model_id=model,
-    )
-    uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
-    return video_response(uri, model, "image_to_video", fp, video_size, resolution,
-                          duration_seconds, number_of_videos, audio_info,
-                          ef_info, [img.filename], result.operation_name)
+    try:
+        result = generate_video(
+            prompt=fp, aspect_ratio=video_size, duration_seconds=duration_seconds,
+            negative_prompt=effective_negative(negative_prompt), generate_audio=True,
+            resolution=resolution, number_of_videos=number_of_videos, seed=None,
+            generation_mode="image_to_video", source_image_gcs_uri=image_uri,
+            source_image_mime=img.mime_type, last_frame_gcs_uri=ef_uri, last_frame_mime=ef_mime,
+            output_gcs_uri=generate_video_output_uri(action or "animated"), model_id=model,
+        )
+        uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
+        return video_response(uri, model, "image_to_video", fp, video_size, resolution,
+                              duration_seconds, number_of_videos, audio_info,
+                              ef_info, [img.filename], result.operation_name)
+    except RuntimeError as e:
+        msg = str(e)
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        raise HTTPException(status_code=code, detail=msg)
+    except Exception as e:
+        logger.exception("image_to_video failed")
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -605,17 +621,25 @@ async def reference_to_video(
                           inject_dialogue=True)
 
     model = VIDEO_MODEL_DEFAULTS["reference_to_video"]
-    result = generate_video(
-        prompt=fp, aspect_ratio=video_size, duration_seconds=dur,
-        negative_prompt=effective_negative(negative_prompt), generate_audio=True,
-        resolution=resolution, number_of_videos=Variants, seed=None,
-        generation_mode="reference_to_video", reference_images=imgs,
-        output_gcs_uri=generate_video_output_uri(subject or "reference"), model_id=model,
-    )
-    uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
-    return video_response(uri, model, "reference_to_video", fp, video_size, resolution,
-                          dur, Variants, audio_info,
-                          {"applied": False}, [i.filename for i in imgs], result.operation_name)
+    try:
+        result = generate_video(
+            prompt=fp, aspect_ratio=video_size, duration_seconds=dur,
+            negative_prompt=effective_negative(negative_prompt), generate_audio=True,
+            resolution=resolution, number_of_videos=Variants, seed=None,
+            generation_mode="reference_to_video", reference_images=imgs,
+            output_gcs_uri=generate_video_output_uri(subject or "reference"), model_id=model,
+        )
+        uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
+        return video_response(uri, model, "reference_to_video", fp, video_size, resolution,
+                              dur, Variants, audio_info,
+                              {"applied": False}, [i.filename for i in imgs], result.operation_name)
+    except RuntimeError as e:
+        msg = str(e)
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        raise HTTPException(status_code=code, detail=msg)
+    except Exception as e:
+        logger.exception("reference_to_video failed")
+        raise HTTPException(status_code=500, detail=f"Video generation failed: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -639,15 +663,23 @@ async def refine_video_endpoint(
     vid_upload = upload_bytes_to_gcs(vid_data, vid_blob, content_type="video/mp4")
 
     model = VIDEO_MODEL_DEFAULTS["refine_video"]
-    result = generate_video(
-        prompt=edit_prompt, aspect_ratio=video_size,
-        duration_seconds=7,  # extend_video only supports 7s
-        negative_prompt=effective_negative(""), generate_audio=True,
-        resolution=resolution, number_of_videos=1, seed=None,
-        generation_mode="extend_video",
-        source_video_gcs_uri=vid_upload.gcs_uri,
-        output_gcs_uri=generate_video_output_uri("refined"), model_id=model,
-    )
+    try:
+        result = generate_video(
+            prompt=edit_prompt, aspect_ratio=video_size,
+            duration_seconds=7,  # extend_video only supports 7s
+            negative_prompt=effective_negative(""), generate_audio=True,
+            resolution=resolution, number_of_videos=1, seed=None,
+            generation_mode="extend_video",
+            source_video_gcs_uri=vid_upload.gcs_uri,
+            output_gcs_uri=generate_video_output_uri("refined"), model_id=model,
+        )
+    except RuntimeError as e:
+        msg = str(e)
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        raise HTTPException(status_code=code, detail=msg)
+    except Exception as e:
+        logger.exception("refine_video failed")
+        raise HTTPException(status_code=500, detail=f"Video refinement failed: {e}")
 
     return JSONResponse(content={
         "status": "success", "gcs_uri": result.gcs_uri,
