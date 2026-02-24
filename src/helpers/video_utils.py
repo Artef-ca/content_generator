@@ -8,6 +8,7 @@ Veo is a long-running operation API:
 """
 
 import io
+import os
 import re
 import time
 import uuid
@@ -40,6 +41,7 @@ logger = logging.getLogger("creative_studio")
 class VideoGenerationResult:
     """Structured output from a video generation call."""
     gcs_uri: str
+    gcs_uris: list  # all video URIs (one per variation)
     operation_name: str
 
 
@@ -368,7 +370,7 @@ def generate_video(
         raise RuntimeError(f"Veo generation failed (code {error_code}): {error_msg}")
 
     # ── Try to extract generated videos ──────────────────────────────────
-    video_uri = None
+    video_uris: list[str] = []
     video_bytes = None
 
     for source_name, source_obj in [
@@ -379,77 +381,89 @@ def generate_video(
             logger.info("operation.%s is None — skipping", source_name)
             continue
 
-        # Check for RAI filtering
-        rai_count = getattr(source_obj, "rai_media_filtered_count", None)
+        # Check for RAI filtering — handle both dict and SDK object
+        if isinstance(source_obj, dict):
+            rai_count = source_obj.get("rai_media_filtered_count")
+            rai_reasons = source_obj.get("rai_media_filtered_reasons") or []
+        else:
+            rai_count = getattr(source_obj, "rai_media_filtered_count", None)
+            rai_reasons = getattr(source_obj, "rai_media_filtered_reasons", None) or []
         if rai_count and int(rai_count) > 0:
+            reason = rai_reasons[0] if rai_reasons else "Content violated Vertex AI usage guidelines."
             raise RuntimeError(
-                f"Video was blocked by Google's safety filter "
-                f"(raiMediaFilteredCount={rai_count}). "
-                "Try adjusting the prompt to avoid sensitive content."
+                f"Your video was blocked by Vertex AI's safety filter. "
+                f"{reason} Please rephrase the prompt and try again."
             )
 
-        # Try to get generated_videos
-        generated = getattr(source_obj, "generated_videos", None)
+        # Try to get generated_videos — handle both dict and SDK object
+        if isinstance(source_obj, dict):
+            generated = source_obj.get("generated_videos")
+        else:
+            generated = getattr(source_obj, "generated_videos", None)
         if not generated:
-            logger.info("operation.%s has no generated_videos. Attrs: %s",
+            logger.info("operation.%s has no generated_videos. Keys/attrs: %s",
                         source_name,
-                        [a for a in dir(source_obj) if not a.startswith("_")])
+                        list(source_obj.keys()) if isinstance(source_obj, dict)
+                        else [a for a in dir(source_obj) if not a.startswith("_")])
             continue
 
         logger.info("operation.%s.generated_videos has %d items", source_name, len(generated))
-        video_obj = generated[0].video
-        logger.info("video object attrs: %s", [a for a in dir(video_obj) if not a.startswith("_")])
 
-        # Try every possible URI attribute
-        for uri_attr in ("uri", "gcs_uri", "video_uri"):
-            uri = getattr(video_obj, uri_attr, None)
-            if uri:
-                video_uri = uri
-                logger.info("Found video URI via %s.%s: %s", source_name, uri_attr, video_uri)
-                break
+        # Collect ALL video URIs (one per variation)
+        for gen_item in generated:
+            video_obj = gen_item.video
+            found_uri = None
+            for uri_attr in ("uri", "gcs_uri", "video_uri"):
+                uri = getattr(video_obj, uri_attr, None)
+                if uri:
+                    found_uri = uri
+                    logger.info("Found video URI via %s.%s: %s", source_name, uri_attr, found_uri)
+                    break
+            if found_uri:
+                video_uris.append(found_uri)
+            elif not video_bytes:
+                # Fallback: inline bytes from first video only
+                raw_data = getattr(video_obj, "video_bytes", None) or getattr(video_obj, "data", None)
+                if raw_data:
+                    video_bytes = raw_data if isinstance(raw_data, bytes) else raw_data.encode()
+                    logger.info("Got inline video bytes: %d bytes", len(video_bytes))
 
-        # If no URI, check for inline bytes (Veo can return bytes directly)
-        if not video_uri:
-            raw_data = getattr(video_obj, "video_bytes", None) or getattr(video_obj, "data", None)
-            if raw_data:
-                video_bytes = raw_data if isinstance(raw_data, bytes) else raw_data.encode()
-                logger.info("Got inline video bytes: %d bytes", len(video_bytes))
-
-        if video_uri or video_bytes:
+        if video_uris or video_bytes:
             break
 
     # ── If we have inline bytes, upload to GCS ───────────────────────────
-    if not video_uri and video_bytes:
+    if not video_uris and video_bytes:
         date_str = datetime.now(_SAUDI_TZ).strftime("%Y-%m-%d")
         slug = _slugify(prompt[:60]) or "video"
         short_id = uuid.uuid4().hex[:8]
         blob_path = f"videos/{date_str}/{slug}_{short_id}.mp4"
         result = upload_bytes_to_gcs(video_bytes, blob_path, content_type="video/mp4")
-        video_uri = result.gcs_uri
-        logger.info("Inline video bytes uploaded to GCS: %s", video_uri)
+        video_uris = [result.gcs_uri]
+        logger.info("Inline video bytes uploaded to GCS: %s", result.gcs_uri)
 
-    # ── If still no URI, check the GCS output prefix ─────────────────────
-    if not video_uri and output_gcs_uri:
+    # ── If still no URIs, check the GCS output prefix ────────────────────
+    if not video_uris and output_gcs_uri:
         # Veo may take a moment to flush to GCS — retry a few times
         for attempt in range(4):
             found = _find_video_in_gcs_prefix(output_gcs_uri)
             if found:
-                video_uri = found
+                video_uris = [found]
                 break
             logger.info("GCS prefix empty, retrying in 10s... (attempt %d/4)", attempt + 1)
             time.sleep(10)
 
-    if not video_uri:
+    if not video_uris:
         raise RuntimeError(
             "Veo completed but no video was produced. "
             "This usually means the content was filtered by safety checks. "
             "Try simplifying the prompt or removing sensitive elements."
         )
 
-    logger.info("Video generated successfully: %s (in %ds)", video_uri, elapsed)
+    logger.info("Video generated successfully: %d video(s) in %ds — %s", len(video_uris), elapsed, video_uris[0])
 
     return VideoGenerationResult(
-        gcs_uri=video_uri,
+        gcs_uri=video_uris[0],
+        gcs_uris=video_uris,
         operation_name=getattr(operation, "name", ""),
     )
 
@@ -477,299 +491,6 @@ def _find_video_in_gcs_prefix(gcs_prefix: str) -> str | None:
     except Exception as e:
         logger.error("Failed to list GCS prefix %s: %s", gcs_prefix, e)
     return None
-# def generate_video(
-#     prompt: str,
-#     aspect_ratio: str = "16:9",
-#     duration_seconds: int = 8,
-#     negative_prompt: str | None = None,
-#     generate_audio: bool = True,
-#     resolution: str = "720p",
-#     number_of_videos: int = 1,
-#     seed: int | None = None,
-#     generation_mode: str = "text_to_video",
-#     source_image_gcs_uri: str | None = None,
-#     source_video_gcs_uri: str | None = None,
-
-#     source_image_mime: str | None = None,
-#     last_frame_gcs_uri: str | None = None,
-#     last_frame_mime: str | None = None,
-#     reference_images: list[ImageInput] | None = None,
-#     output_gcs_uri: str | None = None,
-#     model_id: str | None = None,
-#     poll_interval: int = 15,
-#     max_wait: int = 600,
-#     max_retries: int = 2,
-# ) -> VideoGenerationResult:
-#     """Submit a Veo video generation request and poll until complete.
-
-#     Three modes (aligned with official Vertex AI Veo docs):
-
-#     - **text_to_video**: Prompt only. No images.
-#       SDK: generate_videos(model, prompt, config=...)
-
-#     - **image_to_video**: Single image as first frame + prompt.
-#       SDK: generate_videos(model, prompt, image=Image(...), config=...)
-#       Optionally accepts last_frame for controlled transition (e.g. logo reveal).
-
-#     - **reference_to_video**: 1-3 reference images for identity/asset
-#       preservation (Veo 3.1 preview only, duration always 8s).
-#       SDK: generate_videos(model, prompt, config=GenerateVideosConfig(reference_images=[...]))
-
-#     Parameters
-#     ----------
-#     prompt : str
-#         The assembled cinematic prompt.
-#     source_image_gcs_uri : str, optional
-#         GCS URI of the source image for image_to_video mode (first frame).
-#     source_image_mime : str, optional
-#         MIME type of the source image (image/jpeg, image/png, image/webp).
-#     last_frame_gcs_uri : str, optional
-#         GCS URI of the last frame image (e.g. logo card for brand reveal).
-#         Used with image_to_video mode to control video end state.
-#     last_frame_mime : str, optional
-#         MIME type of the last frame image.
-#     reference_images : list[ImageInput], optional
-#         Up to 3 images for identity preservation (person/product).
-#     resolution : str
-#         "720p", "1080p", or "4k".
-#     number_of_videos : int
-#         Number of variants to generate (1-4).
-#     seed : int, optional
-#         For reproducible results (0-4294967295).
-#     """
-#     model = model_id or VIDEO_MODEL_DEFAULTS["text_to_video"]
-
-#     # ── Build config ─────────────────────────────────────────────────────
-#     config = types.GenerateVideosConfig(
-#         aspect_ratio=aspect_ratio,
-#         number_of_videos=number_of_videos,
-#         duration_seconds=duration_seconds,
-#         generate_audio=generate_audio,
-#         person_generation="allow_adult",
-#     )
-
-#     if resolution and resolution != "720p":
-#         config.resolution = resolution
-
-#     if negative_prompt:
-#         config.negative_prompt = negative_prompt
-
-#     if seed is not None:
-#         config.seed = seed
-
-#     if output_gcs_uri:
-#         config.output_gcs_uri = output_gcs_uri
-
-#     # ── Image-to-video: single source image as first frame ───────────────
-#     # Official SDK: image=Image(gcs_uri=..., mime_type=...)
-#     image_param = None
-#     if generation_mode == "image_to_video" and source_image_gcs_uri:
-#         mime = source_image_mime or "image/png"
-#         image_param = types.Image(gcs_uri=source_image_gcs_uri, mime_type=mime)
-#         logger.info("Image-to-video: using source image %s (%s)", source_image_gcs_uri, mime)
-
-#     # ── Last frame (logo card / ending image) ────────────────────────────
-#     # Official SDK: config.last_frame = Image(gcs_uri=..., mime_type=...)
-#     # ⚠ ONLY supported by Veo 3.1 models (preview/fast_preview).
-#     #   Veo 3.0 (standard/fast) will return 400 FAILED_PRECONDITION.
-#     VEO_31_MODELS = {"veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", "veo-3.1-generate-001"}
-#     if last_frame_gcs_uri and image_param is not None:
-#         if model in VEO_31_MODELS:
-#             lf_mime = last_frame_mime or "image/png"
-#             config.last_frame = types.Image(gcs_uri=last_frame_gcs_uri, mime_type=lf_mime)
-#             logger.info("Last frame set: %s (%s) — video will transition to this", last_frame_gcs_uri, lf_mime)
-#         else:
-#             logger.warning(
-#                 "last_frame skipped — model %s does not support it. "
-#                 "Use veo_variant=preview or fast_preview for logo-as-last-frame.",
-#                 model,
-#             )
-
-#     # ── Reference-to-video: 1-3 identity images in config ────────────────
-#     # Official SDK: config.reference_images = [VideoGenerationReferenceImage(...)]
-#     if generation_mode == "reference_to_video" and reference_images:
-#         ref_list = []
-#         for i, ref_img in enumerate(reference_images[:3]):
-#             ref_uri = _upload_image_to_gcs(ref_img, f"reference_{i+1}")
-
-#             # Try typed class first, fall back to dict if SDK version doesn't support it
-#             try:
-#                 ref_obj = types.VideoGenerationReferenceImage(
-#                     image=types.Image(gcs_uri=ref_uri, mime_type=ref_img.mime_type),
-#                     reference_type="asset",
-#                 )
-#             except (AttributeError, TypeError) as e:
-#                 logger.warning(
-#                     "VideoGenerationReferenceImage not available (%s), using dict fallback", e
-#                 )
-#                 ref_obj = {
-#                     "image": {"gcs_uri": ref_uri, "mime_type": ref_img.mime_type},
-#                     "reference_type": "asset",
-#                 }
-
-#             ref_list.append(ref_obj)
-#         config.reference_images = ref_list
-#         logger.info("Using %d reference image(s) for identity preservation", len(ref_list))
-
-#     # ── Submit request ───────────────────────────────────────────────────
-#     logger.info(
-#         "Submitting Veo request: model=%s, mode=%s, duration=%ds, resolution=%s, variants=%d",
-#         model, generation_mode, duration_seconds, resolution, number_of_videos,
-#     )
-
-#     operation = genai_client.models.generate_videos(
-#         model=model,
-#         prompt=prompt,
-#         image=image_param,
-#         config=config,
-#     )
-#     logger.info("Operation started: %s", getattr(operation, "name", "unknown"))
-
-#     # Poll until done
-#     elapsed = 0
-#     while not operation.done:
-#         if elapsed >= max_wait:
-#             raise RuntimeError(
-#                 f"Video generation timed out after {max_wait}s. "
-#                 f"Operation: {getattr(operation, 'name', 'unknown')}"
-#             )
-#         logger.info("Polling... (%ds elapsed)", elapsed)
-#         time.sleep(poll_interval)
-#         elapsed += poll_interval
-#         operation = genai_client.operations.get(operation)
-
-#     # Extract result — full debug dump to diagnose SDK structure
-#     logger.info("Operation done in %ds. Extracting result...", elapsed)
-
-#     # ── Dump everything for debugging ────────────────────────────────────
-#     # .result and .response may differ across SDK versions
-#     for attr_name in ("result", "response", "error", "metadata"):
-#         val = getattr(operation, attr_name, "N/A")
-#         if val and val != "N/A":
-#             logger.info("operation.%s = %s", attr_name, _safe_repr(val))
-#         else:
-#             logger.info("operation.%s = (empty/None)", attr_name)
-
-#     # Check for error — retry on transient failures (code 13 = INTERNAL)
-#     if operation.error:
-#         error_code = operation.error.get("code") if isinstance(operation.error, dict) else getattr(operation.error, "code", None)
-#         error_msg = operation.error.get("message", str(operation.error)) if isinstance(operation.error, dict) else str(operation.error)
-#         RETRYABLE_CODES = {13, 14}  # 13=INTERNAL, 14=UNAVAILABLE
-#         if error_code in RETRYABLE_CODES and max_retries > 0:
-#             logger.warning(
-#                 "Veo transient error (code=%s): %s — retrying (%d retries left)",
-#                 error_code, error_msg, max_retries,
-#             )
-#             time.sleep(5)
-#             return generate_video(
-#                 prompt=prompt,
-#                 aspect_ratio=aspect_ratio,
-#                 duration_seconds=duration_seconds,
-#                 negative_prompt=negative_prompt,
-#                 generate_audio=generate_audio,
-#                 resolution=resolution,
-#                 number_of_videos=number_of_videos,
-#                 seed=seed,
-#                 generation_mode=generation_mode,
-#                 source_image_gcs_uri=source_image_gcs_uri,
-#                 source_image_mime=source_image_mime,
-#                 last_frame_gcs_uri=last_frame_gcs_uri,
-#                 last_frame_mime=last_frame_mime,
-#                 reference_images=reference_images,
-#                 output_gcs_uri=output_gcs_uri,
-#                 model_id=model_id,
-#                 poll_interval=poll_interval,
-#                 max_wait=max_wait,
-#                 max_retries=max_retries - 1,
-#             )
-#         raise RuntimeError(f"Veo generation failed (code {error_code}): {error_msg}")
-
-#     # ── Try to extract generated videos ──────────────────────────────────
-#     video_uri = None
-#     video_bytes = None
-
-#     for source_name, source_obj in [
-#         ("result", operation.result),
-#         ("response", operation.response),
-#     ]:
-#         if source_obj is None:
-#             logger.info("operation.%s is None — skipping", source_name)
-#             continue
-
-#         # Check for RAI filtering
-#         rai_count = getattr(source_obj, "rai_media_filtered_count", None)
-#         if rai_count and int(rai_count) > 0:
-#             raise RuntimeError(
-#                 f"Video was blocked by Google's safety filter "
-#                 f"(raiMediaFilteredCount={rai_count}). "
-#                 "Try adjusting the prompt to avoid sensitive content."
-#             )
-
-#         # Try to get generated_videos
-#         generated = getattr(source_obj, "generated_videos", None)
-#         if not generated:
-#             logger.info("operation.%s has no generated_videos. Attrs: %s",
-#                         source_name,
-#                         [a for a in dir(source_obj) if not a.startswith("_")])
-#             continue
-
-#         logger.info("operation.%s.generated_videos has %d items", source_name, len(generated))
-#         video_obj = generated[0].video
-#         logger.info("video object attrs: %s", [a for a in dir(video_obj) if not a.startswith("_")])
-
-#         # Try every possible URI attribute
-#         for uri_attr in ("uri", "gcs_uri", "video_uri"):
-#             uri = getattr(video_obj, uri_attr, None)
-#             if uri:
-#                 video_uri = uri
-#                 logger.info("Found video URI via %s.%s: %s", source_name, uri_attr, video_uri)
-#                 break
-
-#         # If no URI, check for inline bytes (Veo can return bytes directly)
-#         if not video_uri:
-#             raw_data = getattr(video_obj, "video_bytes", None) or getattr(video_obj, "data", None)
-#             if raw_data:
-#                 video_bytes = raw_data if isinstance(raw_data, bytes) else raw_data.encode()
-#                 logger.info("Got inline video bytes: %d bytes", len(video_bytes))
-
-#         if video_uri or video_bytes:
-#             break
-
-#     # ── If we have inline bytes, upload to GCS ───────────────────────────
-#     if not video_uri and video_bytes:
-#         date_str = datetime.now(_SAUDI_TZ).strftime("%Y-%m-%d")
-#         slug = _slugify(prompt[:60]) or "video"
-#         short_id = uuid.uuid4().hex[:8]
-#         blob_path = f"videos/{date_str}/{slug}_{short_id}.mp4"
-#         result = upload_bytes_to_gcs(video_bytes, blob_path, content_type="video/mp4")
-#         video_uri = result.gcs_uri
-#         logger.info("Inline video bytes uploaded to GCS: %s", video_uri)
-
-#     # ── If still no URI, check the GCS output prefix ─────────────────────
-#     if not video_uri and output_gcs_uri:
-#         # Veo may take a moment to flush to GCS — retry a few times
-#         for attempt in range(4):
-#             found = _find_video_in_gcs_prefix(output_gcs_uri)
-#             if found:
-#                 video_uri = found
-#                 break
-#             logger.info("GCS prefix empty, retrying in 10s... (attempt %d/4)", attempt + 1)
-#             time.sleep(10)
-
-#     if not video_uri:
-#         raise RuntimeError(
-#             "Veo completed but no video was produced. "
-#             "This usually means the content was filtered by safety checks. "
-#             "Try simplifying the prompt or removing sensitive elements."
-#         )
-
-#     logger.info("Video generated successfully: %s (in %ds)", video_uri, elapsed)
-
-#     return VideoGenerationResult(
-#         gcs_uri=video_uri,
-#         operation_name=getattr(operation, "name", ""),
-#     )
-
 
 def _safe_repr(obj, max_len: int = 500) -> str:
     """Safe string repr of an object, truncated for logging."""
@@ -952,3 +673,94 @@ def merge_audio_video(
 
         with open(out.name, "rb") as f:
             return f.read()
+
+
+# ---------------------------------------------------------------------------
+# Logo Overlay (ffmpeg)
+# ---------------------------------------------------------------------------
+
+# Position map: (ax, ay) normalised coords  0.0=start  0.5=center  1.0=end
+_VIDEO_POSITION_MAP = {
+    "top_left":      (0.0, 0.0),
+    "top_center":    (0.5, 0.0),
+    "top_right":     (1.0, 0.0),
+    "center_left":   (0.0, 0.5),
+    "center":        (0.5, 0.5),
+    "center_right":  (1.0, 0.5),
+    "bottom_left":   (0.0, 1.0),
+    "bottom_center": (0.5, 1.0),
+    "bottom_right":  (1.0, 1.0),
+}
+_VIDEO_LOGO_SIZE = {"small": 0.08, "medium": 0.15, "large": 0.25}
+_VIDEO_MARGIN = 0.03  # 3% margin from edges
+
+def overlay_logo_on_video(
+    video_bytes: bytes,
+    logo_bytes: bytes,
+    position: str = "bottom_right",
+    size: str = "medium",
+) -> bytes:
+    """Composite a logo PNG onto every frame of a video using ffmpeg.
+
+    Returns the composited video as MP4 bytes.
+    """
+    ffmpeg_bin = _get_ffmpeg_path()
+    scale = _VIDEO_LOGO_SIZE.get(size, _VIDEO_LOGO_SIZE["medium"])
+    ax, ay = _VIDEO_POSITION_MAP.get(position, _VIDEO_POSITION_MAP["bottom_right"])
+
+    # In overlay filter: main_w/main_h = video dims, overlay_w/overlay_h = logo dims
+    x_margin = f"main_w*{_VIDEO_MARGIN}"
+    y_margin = f"main_h*{_VIDEO_MARGIN}"
+
+    if ax == 0.0:
+        x_expr = x_margin
+    elif ax == 1.0:
+        x_expr = f"main_w-overlay_w-{x_margin}"
+    else:
+        x_expr = "(main_w-overlay_w)/2"
+
+    if ay == 0.0:
+        y_expr = y_margin
+    elif ay == 1.0:
+        y_expr = f"main_h-overlay_h-{y_margin}"
+    else:
+        y_expr = "(main_h-overlay_h)/2"
+
+    vf = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    lf = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    out = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    try:
+        vf.write(video_bytes); vf.flush(); vf.close()
+        lf.write(logo_bytes); lf.flush(); lf.close()
+        out.close()
+
+        # scale2ref sizes the logo relative to VIDEO width (not logo's own width)
+        # [1:v][0:v]scale2ref=w=main_w*scale:h=-1[logo][main]
+        filter_complex = (
+            f"[1:v][0:v]scale2ref=w=main_w*{scale}:h=-1[logo][main];"
+            f"[main][logo]overlay={x_expr}:{y_expr}"
+        )
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-i", vf.name,
+            "-i", lf.name,
+            "-filter_complex", filter_complex,
+            "-c:a", "copy",
+            out.name,
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode != 0:
+            logger.error("ffmpeg logo overlay stderr: %s", result.stderr.decode(errors="replace"))
+            raise RuntimeError("Logo overlay failed. The video was generated successfully but the logo could not be applied. Try a different logo file (PNG recommended).")
+
+        with open(out.name, "rb") as f:
+            data = f.read()
+    finally:
+        for path in (vf.name, lf.name, out.name):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    logger.info("Logo overlaid on video: pos=%s, size=%s (%.0f%%)", position, size, scale * 100)
+    return data

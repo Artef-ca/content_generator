@@ -55,7 +55,8 @@ class ImageGenerationResponse(BaseModel):
 
 class VideoGenerationResponse(BaseModel):
     status: str = "success"
-    gcs_uri: str
+    gcs_uri: str           # primary (first) video URI
+    gcs_uris: list[str] = []  # all variation URIs
     public_url: str
     model: str
     generation_mode: str

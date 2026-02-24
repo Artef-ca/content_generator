@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install system deps for Pillow
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libjpeg-dev zlib1g-dev fonts-dejavu-core \
+    libjpeg-dev zlib1g-dev fonts-dejavu-core ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

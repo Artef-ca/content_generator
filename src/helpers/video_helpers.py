@@ -201,13 +201,18 @@ async def handle_audio(tts_text, tts_language, audio_file, dialogue, video_uri):
 # Response builder
 # ---------------------------------------------------------------------------
 def video_response(
-    uri, model, mode, prompt, aspect, res, dur, n,
+    uris, model, mode, prompt, aspect, res, dur, n,
     audio_info, end_frame_info, ref_fnames, op,
 ):
+    # uris can be a single string (backward compat) or a list
+    if isinstance(uris, str):
+        uris = [uris]
+    primary = uris[0] if uris else ""
     return {
         "status": "success",
-        "gcs_uri": uri,
-        "public_url": uri.replace(f"gs://{BUCKET_NAME}/", f"https://storage.googleapis.com/{BUCKET_NAME}/"),
+        "gcs_uri": primary,
+        "gcs_uris": uris,
+        "public_url": primary.replace(f"gs://{BUCKET_NAME}/", f"https://storage.googleapis.com/{BUCKET_NAME}/"),
         "model": model, "generation_mode": mode, "prompt_used": prompt,
         "aspect_ratio": aspect, "resolution": res, "duration_seconds": dur,
         "number_of_videos": n,

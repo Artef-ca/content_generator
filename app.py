@@ -12,6 +12,7 @@ Field name mapping (Swagger title → internal variable → downstream):
 """
 
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI, Form, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse , Response
@@ -51,7 +52,9 @@ from src.helpers.video_helpers import (
 )
 from src.helpers.video_utils import (
     generate_video, generate_video_output_uri, ImageInput, _upload_image_to_gcs,
+    overlay_logo_on_video, download_from_gcs,
 )
+from src.helpers.utils import download_gcs_logo
 from src.schema.responses import (                           # ← FIX #1: was src.schema.responses
     ImageGenerationResponse, VideoGenerationResponse,
     RefineImageResponse, RefineVideoResponse, HealthResponse,
@@ -423,6 +426,58 @@ async def refine_image_endpoint(
 #    Negative Prompt (Avoid)
 # ═══════════════════════════════════════════════════════════════════════════
 
+async def _read_video_logo(logo_file, logo_name: str) -> bytes | None:
+    """Read logo bytes from upload or GCS, same pattern as image endpoint."""
+    if logo_file is not None and not isinstance(logo_file, str):
+        try:
+            data = await logo_file.read()
+            if data:
+                return data
+        except Exception:
+            pass
+    if logo_name and logo_name.strip():
+        try:
+            return download_gcs_logo(logo_name.strip())
+        except Exception:
+            pass
+    return None
+
+
+async def _apply_video_logo(
+    uris: list[str], logo_bytes: bytes | None,
+    logo_position: str, logo_size: str,
+) -> list[str]:
+    """Overlay logo on all video URIs and return new GCS URIs.
+
+    Falls back to original URIs if overlay fails, so the video is always returned.
+    """
+    if not logo_bytes:
+        return uris
+    from src.helpers.video_utils import upload_bytes_to_gcs
+    new_uris = []
+    for uri in uris:
+        try:
+            # download_from_gcs handles both direct file URIs and GCS prefix URIs
+            video_bytes = await asyncio.to_thread(download_from_gcs, uri)
+            composited = await asyncio.to_thread(
+                overlay_logo_on_video, video_bytes, logo_bytes, logo_position, logo_size
+            )
+            blob_path = uri.replace(f"gs://{BUCKET_NAME}/", "").rstrip("/")
+            if not blob_path.endswith(".mp4"):
+                blob_path += "_logo.mp4"
+            else:
+                blob_path = blob_path.replace(".mp4", "_logo.mp4")
+            result = await asyncio.to_thread(
+                upload_bytes_to_gcs, composited, blob_path, "video/mp4"
+            )
+            new_uris.append(result.gcs_uri)
+            logger.info("Logo overlay applied: %s → %s", uri, result.gcs_uri)
+        except Exception as e:
+            logger.exception("Logo overlay failed for %s — returning original URI: %s", uri, e)
+            new_uris.append(uri)
+    return new_uris
+
+
 @app.post("/generate-video/text", tags=["Video Generation"],
           response_model=VideoGenerationResponse, summary="Text To Video")
 async def text_to_video(
@@ -448,24 +503,27 @@ async def text_to_video(
     number_of_videos: int = Form(1, title="Variations", description="How many variants to generate (1-4)."),
     resolution: str = Form(VIDEO_DEFAULTS["resolution"], title="Resolution"),
     negative_prompt: str = Form("", title="Negative Prompt (Avoid)"),
+    # ── Logo ──────────────────────────────────────────────────────────
+    logo_file: UploadFile | None = File(default=None, title="Logo File (PNG)"),
+    logo_name: str = Form("", title="Logo (From Library)"),
+    logo_position: str = Form(DEFAULTS["logo_position"], title="Logo Position"),
+    logo_size: str = Form(DEFAULTS["logo_size"], title="Logo Size"),
 ):
     subject, action, scene_context = clean(subject), clean(action), clean(scene_context)
     dialogue, negative_prompt = clean(dialogue), clean(negative_prompt)
     if not subject:
         raise HTTPException(400, "Subject is required.")
 
-    # FIX #5: pass framing→lens_effect and video_motion→temporal_elements
     validate_video_params(video_size, duration_seconds, resolution, number_of_videos,
                           camera_angle, camera_movement, framing, visual_style, tone, video_motion)
 
     fp = build_veo_prompt(subject, action, scene_context, "", dialogue,
                           camera_angle, camera_movement,
-                          framing,              # → lens_effect param
-                          visual_style, tone,
-                          video_motion,         # → temporal_elements param
-                          sound_ambience, negative_prompt,
+                          framing, visual_style, tone,
+                          video_motion, sound_ambience, negative_prompt,
                           inject_dialogue=False)
 
+    logo_bytes = await _read_video_logo(logo_file, logo_name)
     model = VIDEO_MODEL_DEFAULTS["text_to_video"]
     try:
         result = generate_video(
@@ -475,13 +533,16 @@ async def text_to_video(
             generation_mode="text_to_video",
             output_gcs_uri=generate_video_output_uri(subject), model_id=model,
         )
-        uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
-        return video_response(uri, model, "text_to_video", fp, video_size, resolution,
+        final_uris = await _apply_video_logo(result.gcs_uris, logo_bytes, logo_position, logo_size)
+        primary, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, final_uris[0])
+        final_uris[0] = primary
+        logo_info = {"applied": bool(logo_bytes), "position": logo_position, "size": logo_size} if logo_bytes else {"applied": False}
+        return video_response(final_uris, model, "text_to_video", fp, video_size, resolution,
                               duration_seconds, number_of_videos, audio_info,
-                              {"applied": False}, [], result.operation_name)
+                              logo_info, [], result.operation_name)
     except RuntimeError as e:
         msg = str(e)
-        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting", "safety filter")) else 500
         raise HTTPException(status_code=code, detail=msg)
     except Exception as e:
         logger.exception("text_to_video failed")
@@ -528,6 +589,11 @@ async def image_to_video(
     resolution: str = Form(VIDEO_DEFAULTS["resolution"], title="Resolution", description="Output resolution (e.g., 720p)."),
     number_of_videos: int = Form(1, title="Variations", description="How many variants to generate."),
     negative_prompt: str = Form("", title="Negative Prompt (Avoid)", description="What to avoid."),
+    # ── Logo ──────────────────────────────────────────────────────────
+    logo_file: UploadFile | None = File(default=None, title="Logo File (PNG)"),
+    logo_name: str = Form("", title="Logo (From Library)"),
+    logo_position: str = Form(DEFAULTS["logo_position"], title="Logo Position"),
+    logo_size: str = Form(DEFAULTS["logo_size"], title="Logo Size"),
 ):
     img = await read_upload(source_image, "source_image")
     if not img:
@@ -543,6 +609,7 @@ async def image_to_video(
                           inject_dialogue=True)
     image_uri = _upload_image_to_gcs(img, "source")
     ef_uri, ef_mime, ef_info = await prepare_end_frame(end_frame_image)
+    logo_bytes = await _read_video_logo(logo_file, logo_name)
 
     model_key = "image_to_video_endframe" if ef_uri else "image_to_video"
     model = VIDEO_MODEL_DEFAULTS[model_key]
@@ -556,13 +623,16 @@ async def image_to_video(
             source_image_mime=img.mime_type, last_frame_gcs_uri=ef_uri, last_frame_mime=ef_mime,
             output_gcs_uri=generate_video_output_uri(action or "animated"), model_id=model,
         )
-        uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
-        return video_response(uri, model, "image_to_video", fp, video_size, resolution,
+        final_uris = await _apply_video_logo(result.gcs_uris, logo_bytes, logo_position, logo_size)
+        primary, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, final_uris[0])
+        final_uris[0] = primary
+        logo_info = {"applied": bool(logo_bytes), "position": logo_position, "size": logo_size} if logo_bytes else ef_info
+        return video_response(final_uris, model, "image_to_video", fp, video_size, resolution,
                               duration_seconds, number_of_videos, audio_info,
-                              ef_info, [img.filename], result.operation_name)
+                              logo_info, [img.filename], result.operation_name)
     except RuntimeError as e:
         msg = str(e)
-        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting", "safety filter")) else 500
         raise HTTPException(status_code=code, detail=msg)
     except Exception as e:
         logger.exception("image_to_video failed")
@@ -602,6 +672,11 @@ async def reference_to_video(
     resolution: str = Form(VIDEO_DEFAULTS["resolution"], title="Resolution"),
     Variants: int = Form(1, title="Variations"),
     negative_prompt: str = Form("", title="Negative Prompt (Avoid)"),
+    # ── Logo ──────────────────────────────────────────────────────────
+    logo_file: UploadFile | None = File(default=None, title="Logo File (PNG)"),
+    logo_name: str = Form("", title="Logo (From Library)"),
+    logo_position: str = Form(DEFAULTS["logo_position"], title="Logo Position"),
+    logo_size: str = Form(DEFAULTS["logo_size"], title="Logo Size"),
 ):
     dur = 8
     img1 = await read_upload(source_image, "source_image")
@@ -620,6 +695,7 @@ async def reference_to_video(
                           video_motion, sound_ambience, negative_prompt,
                           inject_dialogue=True)
 
+    logo_bytes = await _read_video_logo(logo_file, logo_name)
     model = VIDEO_MODEL_DEFAULTS["reference_to_video"]
     try:
         result = generate_video(
@@ -629,13 +705,16 @@ async def reference_to_video(
             generation_mode="reference_to_video", reference_images=imgs,
             output_gcs_uri=generate_video_output_uri(subject or "reference"), model_id=model,
         )
-        uri, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, result.gcs_uri)
-        return video_response(uri, model, "reference_to_video", fp, video_size, resolution,
+        final_uris = await _apply_video_logo(result.gcs_uris, logo_bytes, logo_position, logo_size)
+        primary, audio_info = await handle_audio(dialogue, Language, audio_file, dialogue, final_uris[0])
+        final_uris[0] = primary
+        logo_info = {"applied": bool(logo_bytes), "position": logo_position, "size": logo_size} if logo_bytes else {"applied": False}
+        return video_response(final_uris, model, "reference_to_video", fp, video_size, resolution,
                               dur, Variants, audio_info,
-                              {"applied": False}, [i.filename for i in imgs], result.operation_name)
+                              logo_info, [i.filename for i in imgs], result.operation_name)
     except RuntimeError as e:
         msg = str(e)
-        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting", "safety filter")) else 500
         raise HTTPException(status_code=code, detail=msg)
     except Exception as e:
         logger.exception("reference_to_video failed")
@@ -675,7 +754,7 @@ async def refine_video_endpoint(
         )
     except RuntimeError as e:
         msg = str(e)
-        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting")) else 500
+        code = 422 if any(k in msg for k in ("code 3", "sensitive words", "Responsible AI", "allowlisting", "safety filter")) else 500
         raise HTTPException(status_code=code, detail=msg)
     except Exception as e:
         logger.exception("refine_video failed")
