@@ -13,7 +13,7 @@ Field name mapping (Swagger title → internal variable → downstream):
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Form, File, UploadFile, HTTPException
+from fastapi import FastAPI, Form, File, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse , Response
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
@@ -31,13 +31,14 @@ from src.config import (
     ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_SIZES,
     VISUAL_STYLE_MAP, CAMERA_ANGLE_IMG_MAP, FRAMING_MAP,
     LIGHTING_MAP, TONE_MAP, COLOR_GRADING_MAP,
-    MOBILY_PALETTE,
+    MOBILY_PALETTE, FONTS,
+    TEXT_SIZES, TEXT_WEIGHTS, TEXT_POSITIONS, TEXT_LANGUAGES,
     VIDEO_DEFAULTS, VIDEO_MODEL_DEFAULTS, VIDEO_TONE_MAP,
     CAMERA_ANGLE_MAP, CAMERA_MOVEMENT_MAP, LENS_EFFECT_MAP,
     VIDEO_STYLE_MAP, TEMPORAL_MAP, SOUND_AMBIENCE_MAP,
     VIDEO_ALLOWED_ASPECT_RATIOS, ALLOWED_DURATIONS, ALLOWED_RESOLUTIONS,
     ALLOWED_TTS_LANGUAGES,
-    gcs_client, logger,genai_client,PROJECT_ID,FONTS
+    gcs_client, logger,genai_client,PROJECT_ID
 )
 from src.core.prompt_generator import PromptInputs, build_prompt
 from src.helpers.utils import (
@@ -128,63 +129,92 @@ async def trending_events_endpoint():
 #
 #  Swagger field order:
 #    Subject* → Action → Items In Scene → Setting
-#    Logo File (PNG) → Logo Size → Logo Position
-#    Visual Text → Visual Text Style
-#    Framing → Color Grading → Lighting → Tone / Mood → Visual Style
-#    Image Size → Resolution → Negative Prompt (Avoid)
+#    Logo File (PNG) → Logo Name → Logo Size → Logo Position → Logo Comments
+#    Text Content → Text Font → Text Size → Text Color → Text Weight →
+#      Text Position → Text Language → Text Notes
+#    Visual Style → Framing → Lighting → Tone → Color Palette
+#    Image Size → Resolution → Variations → Negative Prompt
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Pre-built description strings from config (keeps Form() calls readable)
+_D_VISUAL_STYLE  = f"Overall visual style. Options: {', '.join(VISUAL_STYLE_MAP.keys())}."
+_D_FRAMING       = f"Framing / composition. Options: {', '.join(FRAMING_MAP.keys())}."
+_D_LIGHTING      = f"Lighting style. Options: {', '.join(LIGHTING_MAP.keys())}."
+_D_TONE          = f"Tone / mood. Options: {', '.join(TONE_MAP.keys())}."
+_D_COLOR         = (
+    f"Color palette key(s), comma-separated for multiple (first = dominant). "
+    f"Options: {', '.join(COLOR_GRADING_MAP.keys())}."
+)
+_D_LOGO_SIZE     = f"Logo size. Options: {', '.join(LOGO_SIZE_SCALE.keys())}."
+_D_LOGO_POS      = f"Logo placement. Options: {', '.join(POSITION_MAP.keys())}."
+_D_IMAGE_SIZE    = f"Aspect ratio. Options: {', '.join(ALLOWED_ASPECT_RATIOS)}."
+_D_RESOLUTION    = f"Output resolution. Options: {', '.join(ALLOWED_IMAGE_SIZES)}."
+_D_TEXT_FONT     = f"Font for the text block. Options: {', '.join(f['value'] for f in FONTS)}."
+_D_TEXT_SIZE     = f"Text size. Options: {', '.join(TEXT_SIZES)} (S=Small, M=Medium, L=Large)."
+_D_TEXT_WEIGHT   = f"Font weight. Options: {', '.join(TEXT_WEIGHTS)}."
+_D_TEXT_POS      = f"Text placement on image. Options: {', '.join(TEXT_POSITIONS)}."
+_D_TEXT_LANG     = f"Text language. Options: {', '.join(f'{k} ({v})' for k, v in TEXT_LANGUAGES.items())}."
+_D_TEXT_COLOR    = f"Text color (Mobily palette key). Options: {', '.join(COLOR_GRADING_MAP.keys())}."
 
 @app.post("/generate-image", tags=["Image Generation"],
           summary="Generate Branded Marketing Image")
 async def generate_image_endpoint(
+    request: Request,
     # ── Core ──────────────────────────────────────────────────────────
-    subject: str = Form(..., title="Subject", description="Main subject of the image."),
-    action: str = Form("", title="Action", description="What the subject is doing."),
-    items_in_scene: str = Form("", title="Items In Scene", description="Additional objects in scene."),
-    setting: str = Form("", title="Setting", description="Environment and context."),
+    subject: str = Form(...,  title="Subject",        description="Main subject of the image (required)."),
+    action:  str = Form("",   title="Action",         description="What the subject is doing."),
+    items_in_scene: str = Form("", title="Items In Scene", description="Additional objects or elements to include in the scene."),
+    setting: str = Form("",   title="Setting",        description="Environment, location and time of day."),
     # ── Logo ──────────────────────────────────────────────────────────
-    logo_file: UploadFile | None = File(default=None, title="Logo File (PNG)", description="Upload logo PNG. Or pick from library (GET /logos)."),
-    logo_size: str = Form(DEFAULTS["logo_size"], title="Logo Size", description="small (8%), medium (15%), large (25%)."),
-    logo_position: str = Form(DEFAULTS["logo_position"], title="Logo Position", description="top_left, top_center, top_right, center_left, center, center_right, bottom_left, bottom_center, bottom_right."),
-    logo_name: str = Form("", title="Logo (From Library)", description="Pick a pre-uploaded logo name (see GET /logos)."),
-    # ── Visual Text ───────────────────────────────────────────────────
-    visual_text: str = Form("", title="Visual Text", description="Text to render on the image."),
-    visual_text_style: str = Form(DEFAULTS["text_style"], title="Visual Text Style", description="Typography style for visual text."),
-    # ── Rich Text / Comments ──────────────────────────────────────────────
-    text_blocks: str = Form("", title="Text Blocks", description="JSON array of text blocks with per-block color, weight, position, language and size."),
-    logo_comments: str = Form("", title="Logo Comments", description="Additional logo instructions appended to AI prompt."),
-    specs_comments: str = Form("", title="Specs Comments", description="Composition and technical requirements."),
+    logo_file: UploadFile | None = File(default=None, title="Logo File (PNG)", description="Upload a logo PNG directly."),
+    logo_name: str = Form("", title="Logo (From Library)", description="Name of a pre-uploaded logo (see GET /logos). Used if no logo file is uploaded."),
+    logo_size: str = Form(DEFAULTS["logo_size"],     title="Logo Size",     description=_D_LOGO_SIZE),
+    logo_position: str = Form(DEFAULTS["logo_position"], title="Logo Position", description=_D_LOGO_POS),
+    logo_comments: str = Form("", title="Logo Comments", description="Extra instructions for logo placement, e.g. 'place inside white circle'."),
+    # ── Text Block (individual fields — assembled into one text block) ─
+    text_content:  str = Form("",       title="Text Content",  description="Text to display on the image (e.g. رمضان كريم)."),
+    text_font:     str = Form("Arial",  title="Text Font",     description=_D_TEXT_FONT),
+    text_size:     str = Form("M",      title="Text Size",     description=_D_TEXT_SIZE),
+    text_color:    str = Form("white",  title="Text Color",    description=_D_TEXT_COLOR),
+    text_weight:   str = Form("bold",   title="Text Weight",   description=_D_TEXT_WEIGHT),
+    text_position: str = Form("bottom_center", title="Text Position", description=_D_TEXT_POS),
+    text_language: str = Form("ar",     title="Text Language", description=_D_TEXT_LANG),
+    text_notes:    str = Form("",       title="Text Notes",    description="Extra styling instructions for this text block."),
     # ── Creative Controls ─────────────────────────────────────────────
-    framing: str = Form(DEFAULTS["framing"], title="Framing"),
-    color_grading: str = Form(DEFAULTS["color_grading"], title="Color Grading"),
-    lighting: str = Form(DEFAULTS["lighting"], title="Lighting"),
-    tone: str = Form(DEFAULTS["tone"], title="Tone / Mood"),
-    visual_style: str = Form(DEFAULTS["visual_style"], title="Visual Style"),
+    visual_style:  str = Form(DEFAULTS["visual_style"], title="Visual Style",  description=_D_VISUAL_STYLE),
+    framing:       str = Form(DEFAULTS["framing"],      title="Framing",       description=_D_FRAMING),
+    lighting:      str = Form(DEFAULTS["lighting"],     title="Lighting",      description=_D_LIGHTING),
+    tone:          str = Form(DEFAULTS["tone"],         title="Tone / Mood",   description=_D_TONE),
+    color_grading: str = Form(DEFAULTS["color_grading"], title="Color Palette", description=_D_COLOR),
     # ── Output ────────────────────────────────────────────────────────
-    image_size: str = Form(DEFAULTS["aspect_ratio"], title="Image Size", description="Aspect ratio: 1:1, 16:9, 9:16, 4:3, etc."),
-    resolution: str = Form(DEFAULTS["image_size"], title="Resolution", description="1K, 2K, or 4K."),
-    negative_prompt: str = Form("", title="Negative Prompt (Avoid)"),
+    image_size:      str = Form(DEFAULTS["aspect_ratio"], title="Image Size",  description=_D_IMAGE_SIZE),
+    resolution:      str = Form(DEFAULTS["image_size"],   title="Resolution",  description=_D_RESOLUTION),
+    variations:      int = Form(1, title="Variations", description="Number of images to generate (1–4)."),
+    negative_prompt: str = Form("", title="Negative Prompt (Avoid)", description="Describe what to exclude from the image."),
 ):
     # ── Validate ─────────────────────────────────────────────────────
     errors = []
     if visual_style and visual_style not in VISUAL_STYLE_MAP:
-        errors.append(f"Visual Style: {list(VISUAL_STYLE_MAP.keys())}")
+        errors.append(f"Visual Style must be one of: {', '.join(VISUAL_STYLE_MAP.keys())}")
     if framing and framing not in FRAMING_MAP:
-        errors.append(f"Framing: {list(FRAMING_MAP.keys())}")
+        errors.append(f"Framing must be one of: {', '.join(FRAMING_MAP.keys())}")
     if lighting and lighting not in LIGHTING_MAP:
-        errors.append(f"Lighting: {list(LIGHTING_MAP.keys())}")
+        errors.append(f"Lighting must be one of: {', '.join(LIGHTING_MAP.keys())}")
     if tone and tone not in TONE_MAP:
-        errors.append(f"Tone / Mood: {list(TONE_MAP.keys())}")
-    if color_grading and color_grading not in COLOR_GRADING_MAP:
-        errors.append(f"Color Grading: {list(COLOR_GRADING_MAP.keys())}")
-    if image_size not in ALLOWED_ASPECT_RATIOS:                 # ← FIX #4: validate ratio only
-        errors.append(f"Image Size: {ALLOWED_ASPECT_RATIOS}")
-    if resolution not in ALLOWED_IMAGE_SIZES:                   # ← FIX #4: validate resolution only
-        errors.append(f"Resolution: {ALLOWED_IMAGE_SIZES}")
+        errors.append(f"Tone must be one of: {', '.join(TONE_MAP.keys())}")
+    if image_size not in ALLOWED_ASPECT_RATIOS:
+        errors.append(f"Image Size must be one of: {', '.join(ALLOWED_ASPECT_RATIOS)}")
+    if resolution not in ALLOWED_IMAGE_SIZES:
+        errors.append(f"Resolution must be one of: {', '.join(ALLOWED_IMAGE_SIZES)}")
     if logo_position and logo_position not in POSITION_MAP:
-        errors.append(f"Logo Position: {list(POSITION_MAP.keys())}")
+        errors.append(f"Logo Position must be one of: {', '.join(POSITION_MAP.keys())}")
     if logo_size and logo_size not in LOGO_SIZE_SCALE:
-        errors.append(f"Logo Size: {list(LOGO_SIZE_SCALE.keys())}")
+        errors.append(f"Logo Size must be one of: {', '.join(LOGO_SIZE_SCALE.keys())}")
+    # Validate each color key
+    color_grading_list = [c.strip() for c in color_grading.split(",") if c.strip()]
+    invalid_colors = [c for c in color_grading_list if c not in COLOR_GRADING_MAP]
+    if invalid_colors:
+        errors.append(f"Color Palette invalid key(s) {invalid_colors}. Valid: {', '.join(COLOR_GRADING_MAP.keys())}")
     if errors:
         raise HTTPException(400, "; ".join(errors))
 
@@ -207,16 +237,32 @@ async def generate_image_endpoint(
         except Exception as e:
             logger.exception("Logo GCS error: %s", e)
 
-    # ── Parse rich text blocks ────────────────────────────────────────
+    # ── Parse text blocks ─────────────────────────────────────────────
+    # Frontend sends text_blocks as a JSON array (not a Swagger param).
+    # Swagger testers use the individual text_* fields instead.
     parsed_blocks: list = []
-    if text_blocks:
+    raw_form = await request.form()
+    text_blocks_json = raw_form.get("text_blocks", "")
+    if text_blocks_json:
         try:
-            parsed_blocks = json.loads(text_blocks)
+            parsed_blocks = json.loads(text_blocks_json)
         except Exception:
             parsed_blocks = []
 
+    # If no JSON blocks (Swagger tester), build one block from individual fields
+    if not parsed_blocks and text_content.strip():
+        parsed_blocks = [{
+            "text":     text_content.strip(),
+            "font":     text_font,
+            "size":     text_size,
+            "color":    text_color,
+            "weight":   text_weight,
+            "position": text_position,
+            "language": text_language,
+            "comments": text_notes,
+        }]
+
     # ── Build prompt ─────────────────────────────────────────────────
-    # Map Swagger names → PromptInputs names
     inputs = PromptInputs(
         subject=subject,
         action=action,
@@ -226,63 +272,90 @@ async def generate_image_endpoint(
         framing=framing,
         lighting=lighting,
         tone=tone,
-        color_grading=color_grading,
+        color_grading=color_grading_list,
         text_blocks=parsed_blocks,
-        campaign_text=visual_text or None,          # ← legacy fallback when text_blocks is empty
-        text_style=visual_text_style or None,       # ← legacy fallback
-        specs_comments=specs_comments,
         logo_comments=logo_comments,
+        logo_position=logo_position,
+        logo_size=logo_size,
         custom_prompt="",
         negative_prompt=negative_prompt or None,
     )
     final_prompt = build_prompt(inputs)
     logger.info("Image prompt [%s]: %s", _VERSION, final_prompt[:500])
 
-    # ── Generate ─────────────────────────────────────────────────────
+    # ── Generate all variations sequentially ─────────────────────────
+    import asyncio
+
+    num_variations = max(1, min(4, variations))
+    ref_images = [(logo_bytes, "image/png")] if (has_logo and logo_bytes and logo_comments) else None
+
+    _IMAGE_GEN_TIMEOUT = 120  # seconds per attempt
+    _MAX_RETRIES = 3
+
+    async def _gen_one(i: int) -> dict:
+        result = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        generate_image,
+                        prompt=final_prompt,
+                        aspect_ratio=image_size,
+                        image_size=resolution,
+                        reference_images=ref_images,
+                    ),
+                    timeout=_IMAGE_GEN_TIMEOUT,
+                )
+                break  # success — exit retry loop
+            except asyncio.TimeoutError:
+                raise
+            except Exception as e:
+                if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < _MAX_RETRIES - 1:
+                    wait = (2 ** attempt) * 10  # 10s, then 20s
+                    logger.warning("Rate limited on variation %d (attempt %d/%d), retrying in %ds", i + 1, attempt + 1, _MAX_RETRIES, wait)
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+        img = result.image_bytes
+        if has_logo and logo_bytes and not logo_comments:
+            img = await asyncio.to_thread(
+                overlay_logo,
+                image_bytes=img, logo_bytes=logo_bytes,
+                position=logo_position, size=logo_size,
+            )
+        output_path = generate_output_path(subject, prefix=GCS_PREFIXES.get("banners", "banners"))
+        gcs = await asyncio.to_thread(upload_to_gcs, img, output_path)
+        return {"gcs_uri": gcs.gcs_uri, "public_url": gcs.public_url, "model_commentary": result.model_text}
+
     try:
-        result = generate_image(
-    prompt=final_prompt,
-    aspect_ratio=image_size,
-    image_size=resolution,
-    reference_images=[(logo_bytes, "image/png")] if (has_logo and logo_bytes and logo_comments) else None,
-)
+        images_out = []
+        for idx in range(num_variations):
+            logger.info("Generating variation %d/%d", idx + 1, num_variations)
+            images_out.append(await _gen_one(idx))
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Image generation timed out after 120s. Please try again.")
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     except Exception as e:
         logger.exception("Gemini API failed")
         raise HTTPException(502, f"Image generation failed: {e}")
 
-    # ── Overlay logo ─────────────────────────────────────────────────
-    final_image = result.image_bytes
-    logo_info = {"applied": False}
+    # ── Logo info (same for all variations) ──────────────────────────
     if has_logo and logo_bytes and not logo_comments:
-        try:
-            final_image = overlay_logo(
-                image_bytes=result.image_bytes, logo_bytes=logo_bytes,
-                position=logo_position, size=logo_size,
-            )
-            logo_info = {"applied": True, "source": logo_source,
-                         "position": logo_position, "size": logo_size}
-        except Exception as e:
-            logger.exception("Logo overlay failed")
-            logo_info = {"applied": False, "error": str(e)}
+        logo_info = {"applied": True, "source": logo_source, "position": logo_position, "size": logo_size}
     elif has_logo and logo_comments:
         logo_info = {"applied": True, "method": "llm_placed", "source": logo_source}
-
-    # ── Upload ───────────────────────────────────────────────────────
-    output_path = generate_output_path(subject, prefix=GCS_PREFIXES.get("banners", "banners"))
-    gcs_result = upload_to_gcs(final_image, output_path)
+    else:
+        logo_info = {"applied": False}
 
     return JSONResponse(content={
         "status": "success",
-        "gcs_uri": gcs_result.gcs_uri,
-        "public_url": gcs_result.public_url,
+        "images": images_out,
         "model": MODEL_ID,
         "prompt_used": final_prompt,
         "image_size": image_size,
         "resolution": resolution,
         "logo": logo_info,
-        "model_commentary": result.model_text,
         "api_version": _VERSION,
     })
 

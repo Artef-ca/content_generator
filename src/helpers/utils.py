@@ -5,6 +5,7 @@ Utilities — GCS helpers, Gemini API wrapper, and response parsing.
 import re
 import io
 import uuid
+import random
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -157,6 +158,7 @@ def generate_image(
     aspect_ratio: str,
     image_size: str,
     reference_images: list[tuple[bytes, str]] | None = None,
+    seed: int | None = None,
 ) -> GenerationResult:
     """Call Gemini 3 Pro Image and return the generated image + model text.
 
@@ -198,6 +200,7 @@ def generate_image(
             # IMPORTANT: Must include BOTH "TEXT" and "IMAGE".
             # Image-only output is NOT supported for Gemini image models.
             response_modalities=["TEXT", "IMAGE"],
+            **({"seed": seed} if seed is not None else {}),
             image_config=types.ImageConfig(
                 aspect_ratio=aspect_ratio,
                 image_size=image_size,

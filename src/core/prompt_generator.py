@@ -23,10 +23,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.config import (
-    DEFAULTS,
     BRAND_CONFIG,
     VISUAL_STYLE_MAP,
-    CAMERA_ANGLE_IMG_MAP,
     FRAMING_MAP,
     LIGHTING_MAP,
     TONE_MAP,
@@ -95,25 +93,20 @@ class PromptInputs:
     setting: str = ""                       # "a modern Saudi living room at sunset"
     items_in_scene: str = ""                # "lanterns, dates, Arabic coffee"
 
-    # 3-7. Creative Controls (all optional — empty = skip)
+    # 3-6. Creative Controls (all optional — empty = skip)
     visual_style: str = ""
-    camera_angle: str = ""
     framing: str = ""
     lighting: str = ""
     tone: str = ""
-    color_grading: str = ""
+
+    # 7. Color palette — one or more Mobily palette keys (first = dominant)
+    color_grading: list[str] = field(default_factory=list)
 
     # 8. Rich text blocks from the frontend Text tab.
-    # Each dict: {text, size, color, weight, position, language, comments, font}
-    # Takes priority over campaign_text when non-empty.
+    # Each dict: {text, font, size, color, weight, position, language, comments}
     text_blocks: list[dict[str, Any]] = field(default_factory=list)
 
-    # 8b. Legacy single-text fallback (used when text_blocks is empty)
-    campaign_text: str | None = None        # "رمضان كريم"
-    text_style: str | None = None           # "bold modern sans-serif"
-
-    # 8c. Composition & logo guidance from the Specs / Logo tabs
-    specs_comments: str = ""
+    # 8b. Logo guidance
     logo_comments: str = ""
     logo_position: str = ""
     logo_size: str = ""
@@ -129,10 +122,8 @@ def build_prompt(inputs: PromptInputs) -> str:
     """
     Assemble a production-quality image prompt from structured inputs.
 
-    Style + Subject → Setting → Camera → Framing → Lighting → Tone →
-    Color → Specs → Campaign Text → Logo → Custom → Constraints
-
-    Note: Logo is overlaid by Pillow post-generation — not rendered in prompt.
+    Style + Subject → Setting → Framing → Lighting → Tone →
+    Color → Text Blocks → Logo → Custom → Constraints
     """
     sections: list[str] = []
 
@@ -157,37 +148,30 @@ def build_prompt(inputs: PromptInputs) -> str:
     if inputs.items_in_scene:
         sections.append(f"Include these elements: {inputs.items_in_scene}.")
 
-    # ── 3. Camera Angle ───────────────────────────────────────────────────
-    angle = CAMERA_ANGLE_IMG_MAP.get(inputs.camera_angle, "")
-    if angle:
-        sections.append(angle)
-
-    # ── 4. Framing / Composition ──────────────────────────────────────────
+    # ── 3. Framing / Composition ──────────────────────────────────────────
     framing = FRAMING_MAP.get(inputs.framing, "")
     if framing:
         sections.append(framing)
 
-    # ── 5. Lighting ───────────────────────────────────────────────────────
+    # ── 4. Lighting ───────────────────────────────────────────────────────
     light = LIGHTING_MAP.get(inputs.lighting, "")
     if light:
         sections.append(light)
 
-    # ── 6. Tone / Mood ────────────────────────────────────────────────────
+    # ── 5. Tone / Mood ────────────────────────────────────────────────────
     tone = TONE_MAP.get(inputs.tone, "")
     if tone:
         sections.append(tone)
 
-    # ── 7. Color Grading ──────────────────────────────────────────────────
-    color = COLOR_GRADING_MAP.get(inputs.color_grading, "")
-    if color:
-        sections.append(color)
+    # ── 6. Color Grading (supports multiple colors) ───────────────────────
+    color_descs = [COLOR_GRADING_MAP[c] for c in inputs.color_grading if c in COLOR_GRADING_MAP]
+    if color_descs:
+        if len(color_descs) == 1:
+            sections.append(color_descs[0])
+        else:
+            sections.append(color_descs[0] + " With accent colors: " + " ".join(color_descs[1:]))
 
-    # ── 8. Specs Comments (composition / technical guidance) ──────────────
-    if inputs.specs_comments:
-        sections.append(f"Composition note: {inputs.specs_comments}.")
-
-    # ── 9. Campaign Text ─────────────────────────────────────────────────
-    # Logo is overlaid by Pillow post-generation — not in prompt.
+    # ── 7. Text Blocks ────────────────────────────────────────────────────
     active_blocks = [b for b in (inputs.text_blocks or []) if b.get("text", "").strip()]
 
     if active_blocks:
@@ -201,8 +185,8 @@ def build_prompt(inputs: PromptInputs) -> str:
             lang_code  = block.get("language", "en")
             lang_name, is_rtl = _LANG_MAP.get(lang_code, ("", False))
             comments   = block.get("comments", "").strip()
-
             font_name  = block.get("font", VISUAL_TEXT_FONT) or VISUAL_TEXT_FONT
+
             parts = [f"Render the text '{text}' using {font_name} font"]
             parts.append(f"in {weight} weight, {size_label}")
             if color_desc:
@@ -216,30 +200,21 @@ def build_prompt(inputs: PromptInputs) -> str:
             block_parts.append(", ".join(parts) + ".")
 
         sections.append(" ".join(block_parts))
-        
 
-    elif inputs.campaign_text:
-        # Fallback: legacy single-text field (backward compatibility)
-        text_dir = inputs.text_style or DEFAULTS.get("text_style", "elegant typography")
-        sections.append(
-            f"Render the text '{inputs.campaign_text}' using {VISUAL_TEXT_FONT} font, "
-            f"in {text_dir} style, that blends naturally with the overall design."
-        )
-
-    # ── 10. Logo Comments ─────────────────────────────────────────────────
+    # ── 8. Logo Comments ──────────────────────────────────────────────────
     if inputs.logo_comments:
-        pos_label = _POS_MAP.get(inputs.logo_position, "buttom_right")
-        size_label = _SIZE_MAP.get(inputs.logo_size, "small-sized")
+        pos_label  = _POS_MAP.get(inputs.logo_position, "bottom-right corner")
+        size_label = _SIZE_MAP.get(inputs.logo_size, "medium-sized")
         sections.append(
             f"Place the provided logo image at the {pos_label}, "
             f"rendered as a {size_label} element. {inputs.logo_comments}."
         )
 
-    # ── 11. Custom Variation ──────────────────────────────────────────────
+    # ── 9. Custom Variation ───────────────────────────────────────────────
     if inputs.custom_prompt:
         sections.append(inputs.custom_prompt)
 
-    # ── 12. Constraints ───────────────────────────────────────────────────
+    # ── 10. Constraints ───────────────────────────────────────────────────
     if inputs.negative_prompt:
         sections.append(f"Constraints: {inputs.negative_prompt}.")
 

@@ -65,6 +65,14 @@ MODEL_ID: str = _yaml["model"]["id"]
 DEFAULTS: dict = _yaml["defaults"]
 VISUAL_TEXT_FONT: str = DEFAULTS.get("visual_text_font", "Arial")
 FONTS: list[dict] = _yaml.get("fonts", [{"value": "Arial", "label": "Arial"}])
+
+# Text block option lists (for Swagger descriptions + /options endpoint)
+_tb_opts: dict = _yaml.get("text_block_options", {})
+TEXT_SIZES: list[str]     = list(_tb_opts.get("sizes", {}).keys())
+TEXT_WEIGHTS: list[str]   = _tb_opts.get("weights", ["light", "regular", "bold", "black"])
+TEXT_POSITIONS: list[str] = _tb_opts.get("positions", [])
+TEXT_LANGUAGES: dict      = _tb_opts.get("languages", {})
+
 ALLOWED_ASPECT_RATIOS: list[str] = _yaml["allowed_aspect_ratios"]
 ALLOWED_IMAGE_SIZES: list[str] = _yaml["allowed_image_sizes"]
 VISUAL_STYLE_MAP: dict[str, str] = _yaml["visual_styles"]

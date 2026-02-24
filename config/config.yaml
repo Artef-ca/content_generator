@@ -35,6 +35,61 @@ defaults:
   visual_text_font: "Arial"
 
 # ---------------------------------------------------------------------------
+# Fonts — available for text block overlays
+# ---------------------------------------------------------------------------
+fonts:
+  - value: "Arial"
+    label: "Arial"
+  - value: "Helvetica Neue"
+    label: "Helvetica Neue"
+  - value: "Georgia"
+    label: "Georgia"
+  - value: "Times New Roman"
+    label: "Times New Roman"
+  - value: "Roboto"
+    label: "Roboto"
+  - value: "Open Sans"
+    label: "Open Sans"
+  - value: "Montserrat"
+    label: "Montserrat"
+  - value: "Cairo"
+    label: "Cairo (Arabic)"
+  - value: "Tajawal"
+    label: "Tajawal (Arabic)"
+  - value: "Almarai"
+    label: "Almarai (Arabic)"
+
+# ---------------------------------------------------------------------------
+# Text Block Options — valid values for individual text block fields
+# ---------------------------------------------------------------------------
+text_block_options:
+  sizes:
+    S: "Small"
+    M: "Medium"
+    L: "Large"
+  weights:
+    - "light"
+    - "regular"
+    - "bold"
+    - "black"
+  positions:
+    - "top_left"
+    - "top_center"
+    - "top_right"
+    - "center_left"
+    - "center"
+    - "center_right"
+    - "bottom_left"
+    - "bottom_center"
+    - "bottom_right"
+  languages:
+    ar: "Arabic (right-to-left)"
+    en: "English"
+    fr: "French"
+    ur: "Urdu (right-to-left)"
+    fa: "Persian (right-to-left)"
+
+# ---------------------------------------------------------------------------
 # Field Labels — Swagger UI display names (Title Case)
 # ---------------------------------------------------------------------------
 field_labels:
@@ -233,31 +288,6 @@ visual_styles:
   minimalist:      "A sleek minimalist design"
   vintage_poster:  "A vintage retro poster"
   isometric:       "A perfectly isometric 3D scene"
-
-# ---------------------------------------------------------------------------
-# Fonts — available for text block overlays
-# ---------------------------------------------------------------------------
-fonts:
-  - value: "Arial"
-    label: "Arial"
-  - value: "Helvetica Neue"
-    label: "Helvetica Neue"
-  - value: "Georgia"
-    label: "Georgia"
-  - value: "Times New Roman"
-    label: "Times New Roman"
-  - value: "Roboto"
-    label: "Roboto"
-  - value: "Open Sans"
-    label: "Open Sans"
-  - value: "Montserrat"
-    label: "Montserrat"
-  - value: "Cairo"
-    label: "Cairo (Arabic)"
-  - value: "Tajawal"
-    label: "Tajawal (Arabic)"
-  - value: "Almarai"
-    label: "Almarai (Arabic)"
 
 # ---------------------------------------------------------------------------
 # Camera Angles
