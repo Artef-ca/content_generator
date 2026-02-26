@@ -1,6 +1,11 @@
 """
-Configuration — loads creative presets from config/*.yaml,
-manages environment variables and SDK client initialisation.
+Configuration — loads creative presets from GCS bucket (config/*.yaml),
+with local filesystem fallback for development.
+
+GCS path: gs://{GCS_BUCKET}/{CONFIG_GCS_PREFIX}/config.yaml
+          gs://{GCS_BUCKET}/{CONFIG_GCS_PREFIX}/video_config.yaml
+
+Set CONFIG_GCS_PREFIX env var to change the folder path (default: "config").
 """
 
 import os
@@ -21,30 +26,49 @@ logging.basicConfig(
 logger = logging.getLogger("creative_studio")
 
 # ---------------------------------------------------------------------------
-# Load YAML configs
+# Environment / Project  (must be defined before GCS client and config load)
+# ---------------------------------------------------------------------------
+PROJECT_ID: str = os.getenv("GOOGLE_CLOUD_PROJECT", "mobily-genai")
+LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+BUCKET_NAME: str = os.getenv("GCS_BUCKET", "content_creation_data")
+CONFIG_GCS_PREFIX: str = os.getenv("CONFIG_GCS_PREFIX", "config")
+PORT: int = int(os.getenv("PORT", "8080"))
+
+# ---------------------------------------------------------------------------
+# GCS client  (initialized early — required to load YAML configs from GCS)
+# ---------------------------------------------------------------------------
+gcs_client = storage.Client(project=PROJECT_ID)
+
+# ---------------------------------------------------------------------------
+# Load YAML configs — GCS first, local filesystem fallback for dev
 # ---------------------------------------------------------------------------
 _PROJECT_ROOT = Path(__file__).parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
 
 
 def _load_yaml(filename: str) -> dict:
+    """Load a YAML config file from GCS, falling back to local filesystem."""
+    blob_name = f"{CONFIG_GCS_PREFIX}/{filename}"
+    try:
+        data = gcs_client.bucket(BUCKET_NAME).blob(blob_name).download_as_text(encoding="utf-8")
+        result = yaml.safe_load(data)
+        logger.info("Loaded config from GCS: gs://%s/%s", BUCKET_NAME, blob_name)
+        return result
+    except Exception as e:
+        logger.warning(
+            "GCS config unavailable (gs://%s/%s: %s) — falling back to local file",
+            BUCKET_NAME, blob_name, e,
+        )
+
     path = _CONFIG_DIR / filename
     with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    logger.info("Loaded config from %s", path)
-    return data
+        result = yaml.safe_load(f)
+    logger.info("Loaded config from local: %s", path)
+    return result
 
 
 _yaml = _load_yaml("config.yaml")
 _video_yaml = _load_yaml("video_config.yaml")
-
-# ---------------------------------------------------------------------------
-# Environment / Project
-# ---------------------------------------------------------------------------
-PROJECT_ID: str = os.getenv("GOOGLE_CLOUD_PROJECT", "mobily-genai")
-LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
-BUCKET_NAME: str = os.getenv("GCS_BUCKET", "content_creation_data")
-PORT: int = int(os.getenv("PORT", "8080"))
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SHARED
@@ -113,7 +137,6 @@ ALLOWED_RESOLUTIONS: list[str] = _video_yaml["allowed_resolutions"]
 ALLOWED_TTS_LANGUAGES: list[str] = _video_yaml["allowed_tts_languages"]
 
 # ---------------------------------------------------------------------------
-# SDK Clients
+# GenAI client
 # ---------------------------------------------------------------------------
 genai_client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
-gcs_client = storage.Client(project=PROJECT_ID)

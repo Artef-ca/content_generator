@@ -193,7 +193,7 @@ async def generate_image_endpoint(
     image_size:      str = Form(DEFAULTS["aspect_ratio"], title="Image Size",  description=_D_IMAGE_SIZE),
     resolution:      str = Form(DEFAULTS["image_size"],   title="Resolution",  description=_D_RESOLUTION),
     variations:      int = Form(1, title="Variations", description="Number of images to generate (1–4)."),
-    negative_prompt: str = Form("", title="Negative Prompt (Avoid)", description="Describe what to exclude from the image."),
+    negative_prompt: str = Form("", title="Negative Prompt", description="Describe what to exclude from the image."),
 ):
     # ── Validate ─────────────────────────────────────────────────────
     errors = []
@@ -292,8 +292,10 @@ async def generate_image_endpoint(
     num_variations = max(1, min(4, variations))
     ref_images = [(logo_bytes, "image/png")] if (has_logo and logo_bytes and logo_comments) else None
 
-    _IMAGE_GEN_TIMEOUT = 120  # seconds per attempt
-    _MAX_RETRIES = 3
+    _IMAGE_GEN_TIMEOUT = 240  # seconds per attempt
+    _MAX_RETRIES = 4
+    # Quota windows on preview models reset every ~60s — base wait must be >= 60s.
+    _RATE_LIMIT_BASE_WAIT = 60  # seconds; doubles each retry: 60 → 120 → 240
 
     async def _gen_one(i: int) -> dict:
         result = None
@@ -314,8 +316,13 @@ async def generate_image_endpoint(
                 raise
             except Exception as e:
                 if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < _MAX_RETRIES - 1:
-                    wait = (2 ** attempt) * 10  # 10s, then 20s
-                    logger.warning("Rate limited on variation %d (attempt %d/%d), retrying in %ds", i + 1, attempt + 1, _MAX_RETRIES, wait)
+                    wait = min(_RATE_LIMIT_BASE_WAIT * (2 ** attempt), 300)  # 60s, 120s, 240s (cap 300s)
+                    logger.warning(
+                        "Rate limited on variation %d (attempt %d/%d), retrying in %ds — "
+                        "quota exhausted on preview model. Request a quota increase in GCP Console "
+                        "if this persists.",
+                        i + 1, attempt + 1, _MAX_RETRIES, wait,
+                    )
                     await asyncio.sleep(wait)
                 else:
                     raise
@@ -336,11 +343,20 @@ async def generate_image_endpoint(
             logger.info("Generating variation %d/%d", idx + 1, num_variations)
             images_out.append(await _gen_one(idx))
     except asyncio.TimeoutError:
-        raise HTTPException(504, "Image generation timed out after 120s. Please try again.")
+        raise HTTPException(504, "Image generation timed out after 240s. Please try again.")
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     except Exception as e:
         logger.exception("Gemini API failed")
+        err_str = str(e)
+        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            raise HTTPException(
+                429,
+                "Image generation quota exhausted after all retries. "
+                "The image model has limited capacity as a preview model. "
+                "Please wait a minute and try again, or request a quota increase at "
+                "https://console.cloud.google.com/iam-admin/quotas",
+            )
         raise HTTPException(502, f"Image generation failed: {e}")
 
     # ── Logo info (same for all variations) ──────────────────────────
@@ -569,6 +585,7 @@ async def image_to_video(
     source_image: UploadFile = File(..., title="Source Image", description="Primary reference / source image (required)."),
     end_frame_image: UploadFile | str | None = File(None, title="End Frame Image", description="End frame image appears at the end of video."),
     # ── Core ──────────────────────────────────────────────────────────
+    subject: str = Form("", title="Subject", description="Who or what is the subject of the video."),
     action: str = Form("", title="Action", description="What the subject is doing."),
     dialogue: str = Form("", title="Dialogue (Lip-Sync)", description="Dialogue / lip-sync text (if applicable)."),
     scene_context: str = Form("", title="Scene Context", description="Context / location / time of scene."),
@@ -603,7 +620,7 @@ async def image_to_video(
     validate_video_params(video_size, duration_seconds, resolution, number_of_videos,
                           camera_angle, camera_movement, framing, visual_style, tone, video_motion)
 
-    fp = build_veo_prompt("", action, scene_context, "", dialogue,
+    fp = build_veo_prompt(subject, action, scene_context, "", dialogue,
                           camera_angle, camera_movement, framing, visual_style, tone,
                           video_motion, sound_ambience, negative_prompt,
                           inject_dialogue=True)
