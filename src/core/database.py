@@ -163,6 +163,21 @@ class Feedback(Base):
     user: Mapped["User"] = relationship("User", back_populates="feedback")
 
 
+class ImageHistory(Base):
+    """Stores every generated and refined image for session-based history."""
+    __tablename__ = "image_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    gcs_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    public_url: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_used: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model_commentary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("image_history.id"), nullable=True)
+    variation_index: Mapped[Optional[int]] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 async def init_db():
     """Initialize database tables and create demo, prepaid, and postpaid users."""
     async with engine.begin() as conn:

@@ -70,13 +70,18 @@ from src.core.auth import (
     create_access_token, get_current_user,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from src.core.database import get_db, User
+from src.core.database import get_db, get_db_context, User, ImageHistory, init_db
 
 _VERSION = "4.1.1"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.warning("Database init skipped: %s", e)
     logger.info("Creative Studio %s — READY", _VERSION)
     yield
 
@@ -194,6 +199,7 @@ async def generate_image_endpoint(
     resolution:      str = Form(DEFAULTS["image_size"],   title="Resolution",  description=_D_RESOLUTION),
     variations:      int = Form(1, title="Variations", description="Number of images to generate (1–4)."),
     negative_prompt: str = Form("", title="Negative Prompt", description="Describe what to exclude from the image."),
+    embed_brand_style: str = Form("false", title="Embed Mobily Brand Guidelines", description="Set to 'true' to inject Mobily Look & Feel brand context into the prompt."),
 ):
     # ── Validate ─────────────────────────────────────────────────────
     errors = []
@@ -266,6 +272,7 @@ async def generate_image_endpoint(
         }]
 
     # ── Build prompt ─────────────────────────────────────────────────
+    _embed_brand = embed_brand_style.strip().lower() in ("true", "1", "on", "yes")
     inputs = PromptInputs(
         subject=subject,
         action=action,
@@ -282,6 +289,7 @@ async def generate_image_endpoint(
         logo_size=logo_size,
         custom_prompt="",
         negative_prompt=negative_prompt or None,
+        embed_brand_style=_embed_brand,
     )
     final_prompt = build_prompt(inputs)
     logger.info("Image prompt [%s]: %s", _VERSION, final_prompt[:500])
@@ -367,6 +375,26 @@ async def generate_image_endpoint(
     else:
         logo_info = {"applied": False}
 
+    # ── Save to image history (best-effort) ──────────────────────────
+    session_id = request.headers.get("X-Session-ID", "")
+    if session_id:
+        try:
+            async with get_db_context() as db:
+                for idx, img in enumerate(images_out):
+                    entry = ImageHistory(
+                        session_id=session_id,
+                        gcs_uri=img["gcs_uri"],
+                        public_url=img["public_url"],
+                        prompt_used=final_prompt,
+                        model_commentary=img.get("model_commentary", ""),
+                        variation_index=idx,
+                    )
+                    db.add(entry)
+                    await db.flush()
+                    img["history_id"] = entry.id
+        except Exception as e:
+            logger.warning("Image history save failed (non-fatal): %s", e)
+
     return JSONResponse(content={
         "status": "success",
         "images": images_out,
@@ -386,10 +414,12 @@ async def generate_image_endpoint(
 @app.post("/refine-image", tags=["Image Generation"],
           summary="Refine / Edit A Generated Image")
 async def refine_image_endpoint(
+    request: Request,
     source_image: UploadFile = File(..., title="Source Image", description="Image to refine."),
     edit_prompt: str = Form(..., title="Edit Instructions", description="What to change, add, or fix."),
     image_size: str = Form(DEFAULTS["aspect_ratio"], title="Image Size"),
     resolution: str = Form(DEFAULTS["image_size"], title="Resolution"),
+    parent_history_id: str = Form("", title="Parent History ID", description="History ID of the image being refined."),
 ):
     """Send an existing image + edit instructions to Gemini for refinement."""
     img_data = await source_image.read()
@@ -422,12 +452,142 @@ async def refine_image_endpoint(
     output_path = generate_output_path("refined", prefix=GCS_PREFIXES.get("banners", "banners"))
     gcs_result = upload_to_gcs(result.image_bytes, output_path)
 
+    # ── Save to image history (best-effort) ──────────────────────────
+    history_id = None
+    session_id = request.headers.get("X-Session-ID", "")
+    if session_id:
+        try:
+            parent_id = int(parent_history_id) if parent_history_id.strip().isdigit() else None
+            async with get_db_context() as db:
+                entry = ImageHistory(
+                    session_id=session_id,
+                    gcs_uri=gcs_result.gcs_uri,
+                    public_url=gcs_result.public_url,
+                    prompt_used=final_edit_prompt,
+                    model_commentary=result.model_text or "",
+                    parent_id=parent_id,
+                )
+                db.add(entry)
+                await db.flush()
+                history_id = entry.id
+        except Exception as e:
+            logger.warning("Refine history save failed (non-fatal): %s", e)
+
     return JSONResponse(content={
         "status": "success", "gcs_uri": gcs_result.gcs_uri, "public_url": gcs_result.public_url,
         "model": MODEL_ID, "prompt_used": final_edit_prompt,
         "original_image_source": getattr(source_image, "filename", ""),
-        "model_commentary": result.model_text, "api_version": _VERSION,
+        "model_commentary": result.model_text, "history_id": history_id, "api_version": _VERSION,
     })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  IMAGE HISTORY
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/image-history", tags=["Image History"], summary="List recent generated images")
+async def list_image_history(request: Request, limit: int = 50):
+    session_id = request.headers.get("X-Session-ID", "")
+    if not session_id:
+        return JSONResponse(content={"items": []})
+    from sqlalchemy import select as sa_select
+    try:
+        async with get_db_context() as db:
+            result = await db.execute(
+                sa_select(ImageHistory)
+                .where(ImageHistory.session_id == session_id)
+                .order_by(ImageHistory.created_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+            items = [
+                {
+                    "id": r.id,
+                    "gcs_uri": r.gcs_uri,
+                    "public_url": r.public_url,
+                    "prompt_used": r.prompt_used,
+                    "model_commentary": r.model_commentary,
+                    "parent_id": r.parent_id,
+                    "variation_index": r.variation_index,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in rows
+            ]
+        return JSONResponse(content={"items": items})
+    except Exception as e:
+        logger.warning("Image history fetch failed: %s", e)
+        return JSONResponse(content={"items": []})
+
+
+@app.get("/image-history/{history_id}", tags=["Image History"], summary="Get a single history item")
+async def get_image_history_item(history_id: int, request: Request):
+    session_id = request.headers.get("X-Session-ID", "")
+    from sqlalchemy import select as sa_select
+    try:
+        async with get_db_context() as db:
+            result = await db.execute(
+                sa_select(ImageHistory).where(ImageHistory.id == history_id)
+            )
+            row = result.scalar_one_or_none()
+            if not row:
+                raise HTTPException(404, "History item not found")
+            if session_id and row.session_id != session_id:
+                raise HTTPException(403, "Access denied")
+            return JSONResponse(content={
+                "id": row.id,
+                "gcs_uri": row.gcs_uri,
+                "public_url": row.public_url,
+                "prompt_used": row.prompt_used,
+                "model_commentary": row.model_commentary,
+                "parent_id": row.parent_id,
+                "variation_index": row.variation_index,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Image history item fetch failed: %s", e)
+        raise HTTPException(500, "Failed to fetch history item")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  REPHRASE TEXT
+# ═══════════════════════════════════════════════════════════════════════════
+
+class RephraseRequest(BaseModel):
+    text: str
+    field_name: str = ""
+
+@app.post("/rephrase-text", tags=["Utilities"], summary="Fix grammar and rephrase field text")
+async def rephrase_text(req: RephraseRequest):
+    if not req.text.strip():
+        raise HTTPException(400, "Text cannot be empty")
+
+    field_hint = f' for the "{req.field_name}" field' if req.field_name else ""
+    prompt = (
+        f"You are a professional marketing copywriter{field_hint}.\n"
+        "Fix any grammar, spelling, or phrasing issues in the text below. "
+        "Do NOT add, remove, or change the meaning of anything — only improve clarity and correctness. "
+        "Preserve the original language(s): if the user wrote in Arabic keep it Arabic, "
+        "if they mixed Arabic and English keep both. "
+        "Return ONLY the corrected text, nothing else.\n\n"
+        f"Text:\n{req.text.strip()}"
+    )
+
+    try:
+        response = genai_client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[types.Part.from_text(text=prompt)],
+            config=types.GenerateContentConfig(response_modalities=["TEXT"]),
+        )
+        rephrased = ""
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, "text") and part.text:
+                rephrased += part.text
+        return JSONResponse(content={"text": rephrased.strip()})
+    except Exception as e:
+        logger.exception("Rephrase failed")
+        raise HTTPException(502, f"Rephrase failed: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

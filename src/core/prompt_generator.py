@@ -117,6 +117,9 @@ class PromptInputs:
     # 10. Constraints
     negative_prompt: str | None = None
 
+    # 11. Brand style injection flag
+    embed_brand_style: bool = False
+
 
 def build_prompt(inputs: PromptInputs) -> str:
     """
@@ -138,8 +141,8 @@ def build_prompt(inputs: PromptInputs) -> str:
     else:
         sections.append(f"{subject_line}.")
 
-    # ── 1b. Brand Style Context ───────────────────────────────────────────
-    if _BRAND_STYLE:
+    # ── 1b. Brand Style Context (only when user opts in) ─────────────────
+    if inputs.embed_brand_style and _BRAND_STYLE:
         sections.append(_BRAND_STYLE)
 
     # ── 2. Setting / Environment ──────────────────────────────────────────
@@ -207,7 +210,10 @@ def build_prompt(inputs: PromptInputs) -> str:
         size_label = _SIZE_MAP.get(inputs.logo_size, "medium-sized")
         sections.append(
             f"Place the provided logo image at the {pos_label}, "
-            f"rendered as a {size_label} element. {inputs.logo_comments}."
+            f"rendered as a {size_label} element. {inputs.logo_comments}. "
+            f"IMPORTANT: reproduce the logo with pixel-perfect fidelity — "
+            f"preserve its exact colors, shapes, proportions, and transparency exactly as provided. "
+            f"Do NOT recolor, reinterpret, simplify, or alter the logo in any way."
         )
 
     # ── 9. Custom Variation ───────────────────────────────────────────────

@@ -325,7 +325,7 @@ def get_trending_events() -> List[TrendingEvent]:
 
     prompt = f"""
     Today's date is {today.strftime('%B %d, %Y')}.
-    Find 4-5 major upcoming events or festivals in Saudi Arabia between
+    Find exactly 6 major upcoming events or festivals in Saudi Arabia between
     {today.strftime('%B %Y')} and {three_months_later.strftime('%B %Y')}.
     Focus on events suitable for marketing campaigns (entertainment, technology, culture, sports).
     Only include events happening in 2026 or later.
